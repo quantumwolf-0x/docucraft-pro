@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { ChevronRight, Plus, X, Check } from "lucide-react";
 import type { MdFile, MdHeading } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
@@ -9,6 +9,9 @@ interface Props {
   activeFileId: string | null;
   activeHeadingId: string | null;
   progress: ProgressMap;
+  // Controlled so expanded/collapsed chapters persist and restore across sessions.
+  expanded: Record<string, boolean>;
+  onToggleFile: (fileId: string) => void;
   onSelect: (fileId: string, headingId?: string) => void;
   onAddFiles: () => void;
   onRemoveFile: (id: string) => void;
@@ -19,6 +22,8 @@ export function Sidebar({
   activeFileId,
   activeHeadingId,
   progress,
+  expanded,
+  onToggleFile,
   onSelect,
   onAddFiles,
   onRemoveFile,
@@ -26,7 +31,6 @@ export function Sidebar({
   // Progressive disclosure: chapters stay collapsed unless the reader opens
   // them; the current chapter is expanded automatically. This keeps the
   // reader from facing hundreds of headings at once.
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const activeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -116,7 +120,7 @@ export function Sidebar({
                 }`}
               >
                 <button
-                  onClick={() => setExpanded((e) => ({ ...e, [file.id]: !open }))}
+                  onClick={() => onToggleFile(file.id)}
                   className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-2 text-left"
                 >
                   <ChevronRight

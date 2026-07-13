@@ -8,7 +8,6 @@ import {
   X,
   Search,
   Plus,
- 
   Monitor,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,11 +16,23 @@ import { DropZone } from "./DropZone";
 import { Sidebar } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { CommandPalette } from "./CommandPalette";
+import { WorkspaceMenu } from "./WorkspaceMenu";
 import type { MdFile } from "@/lib/markdown-utils";
 import { parseHeadings, readingMinutes } from "@/lib/markdown-utils";
 import { useReadingProgress, pickResume } from "@/lib/reading-progress";
+import {
+  persistence,
+  loadPrefs,
+  savePrefs,
+  newWorkspaceRecord,
+  serializeWorkspace,
+  parseWorkspaceImport,
+  type WorkspaceRecord,
+  type SaveStatus,
+  type ThemePref,
+} from "@/lib/persistence";
 
-type Theme = "light" | "dark" | "system";
+type Theme = ThemePref;
 
 const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 480;
@@ -36,24 +47,49 @@ function loadSidebarWidth(): number {
   return v >= SIDEBAR_MIN && v <= SIDEBAR_MAX ? v : SIDEBAR_DEFAULT;
 }
 
+interface WorkspaceLite {
+  id: string;
+  name: string;
+}
+
 export function DocsApp() {
   const [files, setFiles] = useState<MdFile[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [scrollTarget, setScrollTarget] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [theme, setTheme] = useState<Theme>("system");
+  const [theme, setTheme] = useState<Theme>(() => loadPrefs().theme);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  // Persistence-facing state.
+  const [booting, setBooting] = useState(true);
+  const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+
   const inputRef = useRef<HTMLInputElement>(null);
   const sidebarWrapRef = useRef<HTMLDivElement>(null);
   const sidebarInnerRef = useRef<HTMLDivElement>(null);
-  // Latest width, read imperatively by the collapse animation and the drag
-  // handler so neither fights React's render cycle over the wrapper's width.
   const widthRef = useRef(sidebarWidth);
   const firstCollapseRun = useRef(true);
+
+  // Refs the (async, debounced) save reads from, so it always writes the latest
+  // state without being recreated on every render.
+  const snapshotRef = useRef({ files, activeFileId, expanded, sidebarCollapsed });
+  snapshotRef.current = { files, activeFileId, expanded, sidebarCollapsed };
+  const scrollRef = useRef(0);
+  const workspaceIdRef = useRef<string | null>(null);
+  const workspaceNameRef = useRef("My workspace");
+  const createdAtRef = useRef(Date.now());
+  const hydratedRef = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restoredFlash = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const { map: progress, recordScroll, touch } = useReadingProgress();
 
   useEffect(() => {
@@ -61,9 +97,8 @@ export function DocsApp() {
   }, [sidebarWidth]);
 
   // Collapse/expand the desktop sidebar; the main column is flex-1, so animating
-  // the sidebar width lets content reflow frame-by-frame (Lovable/Linear-style)
-  // rather than snapping. Width is driven imperatively (never via a React style
-  // prop) so a re-render can't clobber the tween mid-flight.
+  // the sidebar width lets content reflow frame-by-frame rather than snapping.
+  // Width is driven imperatively so a re-render can't clobber the tween.
   useEffect(() => {
     const wrap = sidebarWrapRef.current;
     if (!wrap) return;
@@ -84,7 +119,6 @@ export function DocsApp() {
     }
   }, [sidebarCollapsed]);
 
-  // Drag the right edge to resize; commit the final width to localStorage.
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
@@ -112,6 +146,7 @@ export function DocsApp() {
     document.body.style.cursor = "col-resize";
   }, []);
 
+  // Theme: apply to <html> and persist as a lightweight preference.
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
@@ -123,6 +158,143 @@ export function DocsApp() {
     return () => mq.removeEventListener("change", apply);
   }, [theme]);
 
+  useEffect(() => {
+    savePrefs({ theme });
+  }, [theme]);
+
+  // ---- persistence core ----
+
+  const buildRecord = useCallback((): WorkspaceRecord => {
+    const s = snapshotRef.current;
+    return {
+      id: workspaceIdRef.current ?? crypto.randomUUID(),
+      name: workspaceNameRef.current,
+      createdAt: createdAtRef.current,
+      updatedAt: Date.now(),
+      files: s.files.map((f) => ({ id: f.id, name: f.name, content: f.content })),
+      ui: {
+        activeFileId: s.activeFileId,
+        expanded: s.expanded,
+        sidebarCollapsed: s.sidebarCollapsed,
+        scrollTop: scrollRef.current,
+      },
+    };
+  }, []);
+
+  const persistNow = useCallback(
+    async (silent: boolean) => {
+      if (!workspaceIdRef.current) return;
+      try {
+        await persistence.putWorkspace(buildRecord());
+        if (!silent) setSaveStatus("saved");
+      } catch {
+        if (!silent) setSaveStatus("idle");
+      }
+    },
+    [buildRecord],
+  );
+
+  // Called by every user mutation. Shows "Saving…", then writes after a pause.
+  const markDirty = useCallback(() => {
+    if (!hydratedRef.current || !workspaceIdRef.current) return;
+    setSaveStatus("saving");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => void persistNow(false), 700);
+  }, [persistNow]);
+
+  const hydrateWorkspace = useCallback((ws: WorkspaceRecord) => {
+    const parsed: MdFile[] = ws.files.map((f) => ({
+      id: f.id,
+      name: f.name,
+      content: f.content,
+      headings: parseHeadings(f.content, f.id),
+    }));
+    setFiles(parsed);
+    setActiveFileId(ws.ui?.activeFileId ?? parsed[0]?.id ?? null);
+    setExpanded(ws.ui?.expanded ?? {});
+    setSidebarCollapsed(!!ws.ui?.sidebarCollapsed);
+    setWorkspaceId(ws.id);
+    workspaceIdRef.current = ws.id;
+    workspaceNameRef.current = ws.name;
+    createdAtRef.current = ws.createdAt ?? Date.now();
+    const st = ws.ui?.scrollTop ?? 0;
+    scrollRef.current = st;
+    // Restore the exact scroll after the document has painted. Runs after the
+    // viewer's own mount effects, so it wins.
+    setTimeout(() => window.scrollTo({ top: st }), 350);
+    setSaveStatus("restored");
+    if (restoredFlash.current) clearTimeout(restoredFlash.current);
+    restoredFlash.current = setTimeout(
+      () => setSaveStatus((s) => (s === "restored" ? "saved" : s)),
+      2500,
+    );
+  }, []);
+
+  const refreshWorkspaceList = useCallback(async () => {
+    const list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
+    list.sort((a, b) => a.createdAt - b.createdAt);
+    setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
+  }, []);
+
+  // Restore the previous session on first load.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const prefs = loadPrefs();
+        let list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
+        let ws: WorkspaceRecord;
+        if (list.length === 0) {
+          ws = newWorkspaceRecord("My workspace");
+          await persistence.putWorkspace(ws);
+          list = [ws];
+        } else {
+          ws = list.find((w) => w.id === prefs.lastWorkspaceId) ?? list[0];
+        }
+        if (!alive) return;
+        list.sort((a, b) => a.createdAt - b.createdAt);
+        setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
+        hydrateWorkspace(ws);
+        savePrefs({ lastWorkspaceId: ws.id });
+      } finally {
+        if (alive) {
+          hydratedRef.current = true;
+          setBooting(false);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist scroll position (silently) and flush on tab hide / unload.
+  useEffect(() => {
+    const onScroll = () => {
+      scrollRef.current = window.scrollY;
+      if (!hydratedRef.current) return;
+      if (scrollTimer.current) clearTimeout(scrollTimer.current);
+      scrollTimer.current = setTimeout(() => void persistNow(true), 1200);
+    };
+    const flush = () => {
+      if (hydratedRef.current) void persistNow(true);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("beforeunload", flush);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("beforeunload", flush);
+    };
+  }, [persistNow]);
+
+  // ---- file + navigation actions (each marks the workspace dirty) ----
+
   const addFiles = useCallback(
     async (fileList: File[]) => {
       const parsed: MdFile[] = await Promise.all(
@@ -133,7 +305,6 @@ export function DocsApp() {
         }),
       );
       setFiles((prev) => [...prev, ...parsed]);
-      // Resume the chapter the reader last stopped on, if any; else start at one.
       setActiveFileId((cur) => {
         if (cur) return cur;
         const resumeName = pickResume(
@@ -143,8 +314,9 @@ export function DocsApp() {
         const resume = resumeName ? parsed.find((f) => f.name === resumeName) : null;
         return (resume ?? parsed[0])?.id ?? null;
       });
+      markDirty();
     },
-    [progress],
+    [progress, markDirty],
   );
 
   const handleFileInput = (list: FileList | null) => {
@@ -170,6 +342,7 @@ export function DocsApp() {
       window.location.hash = "";
     }
     setDrawerOpen(false);
+    markDirty();
   };
 
   const removeFile = (id: string) => {
@@ -177,15 +350,33 @@ export function DocsApp() {
     if (activeFileId === id) {
       setActiveFileId(files.find((f) => f.id !== id)?.id ?? null);
     }
+    markDirty();
   };
 
-  const handleContentChange = useCallback((fileId: string, content: string) => {
-    setFiles((prev) =>
-      prev.map((f) =>
-        f.id === fileId ? { ...f, content, headings: parseHeadings(content, fileId) } : f,
-      ),
-    );
-  }, []);
+  const toggleFile = useCallback(
+    (fileId: string) => {
+      setExpanded((e) => ({ ...e, [fileId]: !(e[fileId] ?? fileId === activeFileId) }));
+      markDirty();
+    },
+    [activeFileId, markDirty],
+  );
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((c) => !c);
+    markDirty();
+  }, [markDirty]);
+
+  const handleContentChange = useCallback(
+    (fileId: string, content: string) => {
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === fileId ? { ...f, content, headings: parseHeadings(content, fileId) } : f,
+        ),
+      );
+      markDirty();
+    },
+    [markDirty],
+  );
 
   useEffect(() => {
     if (!activeFile) return;
@@ -196,7 +387,6 @@ export function DocsApp() {
     }
   }, [activeFileId]);
 
-  // Record that this chapter is the one currently being read (reading memory).
   useEffect(() => {
     if (activeFile) touch(activeFile.name);
   }, [activeFileId, activeFile, touch]);
@@ -204,7 +394,6 @@ export function DocsApp() {
   const cycleTheme = () =>
     setTheme((t) => (t === "system" ? "light" : t === "light" ? "dark" : "system"));
 
-  // Chapter = file. Derive the reading-orientation facts the UI needs.
   const totalChapters = files.length;
   const completedCount = files.filter((f) => progress[f.name]?.completed).length;
   const activeComplete = activeFile ? !!progress[activeFile.name]?.completed : false;
@@ -218,6 +407,92 @@ export function DocsApp() {
     [activeFile, recordScroll],
   );
 
+  // ---- workspace management ----
+
+  const switchWorkspace = useCallback(
+    async (id: string) => {
+      if (id === workspaceIdRef.current) return;
+      await persistNow(true);
+      const ws = await persistence.getWorkspace(id);
+      if (!ws) return;
+      hydrateWorkspace(ws);
+      savePrefs({ lastWorkspaceId: id });
+    },
+    [persistNow, hydrateWorkspace],
+  );
+
+  const newWorkspace = useCallback(async () => {
+    await persistNow(true);
+    const ws = newWorkspaceRecord(`Workspace ${workspaces.length + 1}`);
+    await persistence.putWorkspace(ws);
+    await refreshWorkspaceList();
+    hydrateWorkspace(ws);
+    savePrefs({ lastWorkspaceId: ws.id });
+  }, [persistNow, refreshWorkspaceList, hydrateWorkspace, workspaces.length]);
+
+  const importWorkspace = useCallback(
+    async (file: File) => {
+      try {
+        const ws = parseWorkspaceImport(await file.text());
+        await persistNow(true);
+        await persistence.putWorkspace(ws);
+        await refreshWorkspaceList();
+        hydrateWorkspace(ws);
+        savePrefs({ lastWorkspaceId: ws.id });
+      } catch {
+        setSaveStatus("idle");
+        alert("That file isn't a valid workspace export.");
+      }
+    },
+    [persistNow, refreshWorkspaceList, hydrateWorkspace],
+  );
+
+  const exportWorkspace = useCallback(() => {
+    const rec = buildRecord();
+    const blob = new Blob([serializeWorkspace(rec)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${rec.name.trim().replace(/\s+/g, "-").toLowerCase() || "workspace"}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [buildRecord]);
+
+  const deleteWorkspace = useCallback(
+    async (id: string) => {
+      await persistence.deleteWorkspace(id);
+      let list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
+      if (list.length === 0) {
+        const ws = newWorkspaceRecord("My workspace");
+        await persistence.putWorkspace(ws);
+        list = [ws];
+      }
+      list.sort((a, b) => a.createdAt - b.createdAt);
+      setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
+      if (id === workspaceIdRef.current) {
+        hydrateWorkspace(list[0]);
+        savePrefs({ lastWorkspaceId: list[0].id });
+      }
+    },
+    [hydrateWorkspace],
+  );
+
+  const workspaceMenu = (
+    <WorkspaceMenu
+      workspaces={workspaces}
+      currentId={workspaceId}
+      onSwitch={switchWorkspace}
+      onNew={newWorkspace}
+      onImport={importWorkspace}
+      onExport={exportWorkspace}
+      onDelete={deleteWorkspace}
+    />
+  );
+
+  if (booting) {
+    return <div className="min-h-dvh bg-background" />;
+  }
+
   if (files.length === 0) {
     return (
       <div className="min-h-dvh bg-background">
@@ -229,6 +504,8 @@ export function DocsApp() {
           onOpenPalette={() => setPaletteOpen(true)}
           hasFiles={false}
           onAddFiles={() => inputRef.current?.click()}
+          saveStatus={saveStatus}
+          workspaceMenu={workspaceMenu}
         />
         <DropZone onFiles={addFiles} fullscreen />
       </div>
@@ -245,7 +522,9 @@ export function DocsApp() {
         hasFiles
         onAddFiles={() => inputRef.current?.click()}
         sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+        onToggleSidebar={toggleSidebar}
+        saveStatus={saveStatus}
+        workspaceMenu={workspaceMenu}
       />
 
       <CommandPalette
@@ -266,6 +545,8 @@ export function DocsApp() {
               activeFileId={activeFileId}
               activeHeadingId={activeHeadingId}
               progress={progress}
+              expanded={expanded}
+              onToggleFile={toggleFile}
               onSelect={handleSelect}
               onAddFiles={() => inputRef.current?.click()}
               onRemoveFile={removeFile}
@@ -315,6 +596,8 @@ export function DocsApp() {
                   activeFileId={activeFileId}
                   activeHeadingId={activeHeadingId}
                   progress={progress}
+                  expanded={expanded}
+                  onToggleFile={toggleFile}
                   onSelect={handleSelect}
                   onAddFiles={() => inputRef.current?.click()}
                   onRemoveFile={removeFile}
@@ -358,6 +641,23 @@ export function DocsApp() {
   );
 }
 
+function SaveIndicator({ status }: { status: SaveStatus }) {
+  if (status === "idle") return null;
+  const map: Record<Exclude<SaveStatus, "idle">, { label: string; dot: string; pulse?: boolean }> =
+    {
+      saving: { label: "Saving…", dot: "bg-amber-500", pulse: true },
+      saved: { label: "All changes saved", dot: "bg-emerald-500" },
+      restored: { label: "Restored", dot: "bg-primary" },
+    };
+  const { label, dot, pulse } = map[status];
+  return (
+    <span className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:inline-flex">
+      <span className={`h-1.5 w-1.5 rounded-full ${dot} ${pulse ? "animate-pulse" : ""}`} />
+      {label}
+    </span>
+  );
+}
+
 function Header({
   theme,
   onCycleTheme,
@@ -368,6 +668,8 @@ function Header({
   onAddFiles,
   sidebarCollapsed,
   onToggleSidebar,
+  saveStatus,
+  workspaceMenu,
 }: {
   theme: Theme;
   onCycleTheme: () => void;
@@ -378,6 +680,8 @@ function Header({
   onAddFiles: () => void;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  saveStatus?: SaveStatus;
+  workspaceMenu?: React.ReactNode;
 }) {
   const ThemeIcon = theme === "dark" ? Sun : theme === "light" ? Moon : Monitor;
   return (
@@ -409,13 +713,15 @@ function Header({
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-foreground text-background">
           <BookOpen className="h-4 w-4" />
         </div>
-        <span className="text-sm font-semibold tracking-tight">Markdown Docs</span>
+        <span className="hidden text-sm font-semibold tracking-tight sm:inline">Markdown Docs</span>
       </div>
+
+      {workspaceMenu}
 
       {hasFiles && (
         <button
           onClick={onOpenPalette}
-          className="ml-4 hidden min-w-60 items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground md:flex"
+          className="ml-2 hidden min-w-52 items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground lg:flex"
         >
           <Search className="h-3.5 w-3.5" />
           <span>Search documentation…</span>
@@ -430,12 +736,13 @@ function Header({
         </button>
       )}
 
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex items-center gap-2">
+        {saveStatus && <SaveIndicator status={saveStatus} />}
         {hasFiles && (
           <>
             <button
               onClick={onOpenPalette}
-              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden"
+              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
               aria-label="Search"
             >
               <Search className="h-4 w-4" />

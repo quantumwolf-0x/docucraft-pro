@@ -467,11 +467,11 @@ function CodeBlock({ children, ...rest }: any) {
 
   return (
     <div className="group relative my-6">
-      {lang && (
+      {/* {lang && (
         <div className="absolute left-3 top-2 z-10 rounded bg-background/60 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground backdrop-blur">
           {lang}
         </div>
-      )}
+      )} */}
       <button
         onClick={() => {
           const code = ref.current?.innerText ?? "";
