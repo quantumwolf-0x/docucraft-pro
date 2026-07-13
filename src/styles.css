@@ -226,3 +226,17 @@
 .dark .hljs-type, .dark .hljs-built_in { color: #ffa657; }
 .dark .hljs-tag { color: #7ee787; }
 .dark .hljs-variable { color: #ffa657; }
+
+/* Search highlight flash */
+@keyframes docs-flash-anim {
+  0% { background-color: color-mix(in oklab, var(--primary) 25%, transparent); }
+  100% { background-color: transparent; }
+}
+.docs-flash { animation: docs-flash-anim 1.6s ease-out; border-radius: 0.25rem; }
+
+/* Task list checkbox alignment */
+.docs-prose li.task-list-item { list-style: none; margin-left: -1.25rem; }
+.docs-prose li.task-list-item input { margin-right: 0.5rem; }
+
+/* Better dark-mode katex */
+.dark .katex { color: var(--foreground); }
