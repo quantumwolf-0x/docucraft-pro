@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BookOpen, Menu, Moon, Sun, X } from "lucide-react";
+import { BookOpen, Menu, Moon, Sun, X, Search, Focus, Monitor } from "lucide-react";
 import { DropZone } from "./DropZone";
 import { Sidebar } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
+import { CommandPalette } from "./CommandPalette";
 import type { MdFile } from "@/lib/markdown-utils";
 import { parseHeadings } from "@/lib/markdown-utils";
+
+type Theme = "light" | "dark" | "system";
 
 export function DocsApp() {
   const [files, setFiles] = useState<MdFile[]>([]);
@@ -12,12 +15,22 @@ export function DocsApp() {
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [scrollTarget, setScrollTarget] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [dark, setDark] = useState(false);
+  const [theme, setTheme] = useState<Theme>("system");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-  }, [dark]);
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const isDark = theme === "dark" || (theme === "system" && mq.matches);
+      document.documentElement.classList.toggle("dark", isDark);
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [theme]);
 
   const addFiles = useCallback(async (fileList: File[]) => {
     const parsed: MdFile[] = await Promise.all(
@@ -42,12 +55,12 @@ export function DocsApp() {
   const prevFile = activeIdx > 0 ? files[activeIdx - 1] : null;
   const nextFile = activeIdx >= 0 && activeIdx < files.length - 1 ? files[activeIdx + 1] : null;
 
-  const handleSelect = (fileId: string, headingId?: string) => {
+  const handleSelect = (fileId: string, headingId?: string, query?: string) => {
     setActiveFileId(fileId);
+    if (query !== undefined) setHighlightQuery(query || null);
     if (headingId) {
       window.location.hash = headingId;
       setScrollTarget(headingId);
-      // clear so re-selecting same heading works
       setTimeout(() => setScrollTarget(null), 100);
     } else {
       setScrollTarget(null);
@@ -63,7 +76,14 @@ export function DocsApp() {
     }
   };
 
-  // Hash-driven scroll on load
+  const handleContentChange = useCallback((fileId: string, content: string) => {
+    setFiles((prev) =>
+      prev.map((f) =>
+        f.id === fileId ? { ...f, content, headings: parseHeadings(content, fileId) } : f,
+      ),
+    );
+  }, []);
+
   useEffect(() => {
     if (!activeFile) return;
     const hash = window.location.hash.slice(1);
@@ -73,15 +93,20 @@ export function DocsApp() {
     }
   }, [activeFileId]);
 
-  // Global drag on empty state
+  const cycleTheme = () => setTheme((t) => (t === "system" ? "light" : t === "light" ? "dark" : "system"));
+
   if (files.length === 0) {
     return (
       <div className="min-h-dvh bg-background">
         <Header
-          onToggleDark={() => setDark((d) => !d)}
-          dark={dark}
+          theme={theme}
+          onCycleTheme={cycleTheme}
           onMenu={null}
           hideMenu
+          onOpenPalette={() => setPaletteOpen(true)}
+          hasFiles={false}
+          focusMode={focusMode}
+          onToggleFocus={() => setFocusMode((f) => !f)}
         />
         <DropZone onFiles={addFiles} fullscreen />
       </div>
@@ -91,25 +116,36 @@ export function DocsApp() {
   return (
     <div className="min-h-dvh bg-background">
       <Header
-        onToggleDark={() => setDark((d) => !d)}
-        dark={dark}
+        theme={theme}
+        onCycleTheme={cycleTheme}
         onMenu={() => setDrawerOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
+        hasFiles
+        focusMode={focusMode}
+        onToggleFocus={() => setFocusMode((f) => !f)}
+      />
+
+      <CommandPalette
+        files={files}
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onSelect={handleSelect}
       />
 
       <div className="flex">
-        {/* Desktop sidebar */}
-        <div className="sticky top-16 hidden h-[calc(100dvh-4rem)] w-72 shrink-0 border-r border-border md:block">
-          <Sidebar
-            files={files}
-            activeFileId={activeFileId}
-            activeHeadingId={activeHeadingId}
-            onSelect={handleSelect}
-            onAddFiles={() => inputRef.current?.click()}
-            onRemoveFile={removeFile}
-          />
-        </div>
+        {!focusMode && (
+          <div className="sticky top-16 hidden h-[calc(100dvh-4rem)] w-72 shrink-0 border-r border-border md:block">
+            <Sidebar
+              files={files}
+              activeFileId={activeFileId}
+              activeHeadingId={activeHeadingId}
+              onSelect={handleSelect}
+              onAddFiles={() => inputRef.current?.click()}
+              onRemoveFile={removeFile}
+            />
+          </div>
+        )}
 
-        {/* Mobile drawer */}
         {drawerOpen && (
           <div className="fixed inset-0 z-50 md:hidden">
             <div
@@ -146,6 +182,9 @@ export function DocsApp() {
               onNavFile={(id) => handleSelect(id)}
               onActiveHeading={setActiveHeadingId}
               scrollTargetId={scrollTarget}
+              highlightQuery={highlightQuery}
+              onContentChange={handleContentChange}
+              focusMode={focusMode}
             />
           )}
         </main>
@@ -164,16 +203,25 @@ export function DocsApp() {
 }
 
 function Header({
-  onToggleDark,
-  dark,
+  theme,
+  onCycleTheme,
   onMenu,
   hideMenu,
+  onOpenPalette,
+  hasFiles,
+  focusMode,
+  onToggleFocus,
 }: {
-  onToggleDark: () => void;
-  dark: boolean;
+  theme: Theme;
+  onCycleTheme: () => void;
   onMenu: (() => void) | null;
   hideMenu?: boolean;
+  onOpenPalette: () => void;
+  hasFiles: boolean;
+  focusMode: boolean;
+  onToggleFocus: () => void;
 }) {
+  const ThemeIcon = theme === "dark" ? Sun : theme === "light" ? Moon : Monitor;
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6">
       {!hideMenu && (
@@ -191,13 +239,52 @@ function Header({
         </div>
         <span className="text-sm font-semibold tracking-tight">Markdown Docs</span>
       </div>
-      <div className="ml-auto flex items-center gap-1">
+
+      {hasFiles && (
         <button
-          onClick={onToggleDark}
-          className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          aria-label="Toggle theme"
+          onClick={onOpenPalette}
+          className="ml-4 hidden min-w-[240px] items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground md:flex"
         >
-          {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          <Search className="h-3.5 w-3.5" />
+          <span>Search documentation…</span>
+          <span className="ml-auto flex items-center gap-1">
+            <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
+              ⌘
+            </kbd>
+            <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
+              K
+            </kbd>
+          </span>
+        </button>
+      )}
+
+      <div className="ml-auto flex items-center gap-1">
+        {hasFiles && (
+          <>
+            <button
+              onClick={onOpenPalette}
+              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden"
+              aria-label="Search"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+            <button
+              onClick={onToggleFocus}
+              className={`rounded-md p-2 transition-colors hover:bg-accent ${focusMode ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              aria-label="Toggle focus mode"
+              title="Focus mode"
+            >
+              <Focus className="h-4 w-4" />
+            </button>
+          </>
+        )}
+        <button
+          onClick={onCycleTheme}
+          className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          aria-label={`Theme: ${theme}`}
+          title={`Theme: ${theme}`}
+        >
+          <ThemeIcon className="h-4 w-4" />
         </button>
       </div>
     </header>
