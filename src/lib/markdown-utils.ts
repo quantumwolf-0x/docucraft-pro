@@ -13,19 +13,20 @@ export interface MdFile {
   headings: MdHeading[];
 }
 
+import GithubSlugger, { slug } from "github-slugger";
+
+// Stateless slug matching rehype-slug (github-slugger) so sidebar/ToC ids
+// line up exactly with the DOM ids rendered by rehypeSlug. Local ad-hoc
+// slugging drifted on `&`, `/`, and other punctuation, breaking navigation.
 export function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-");
+  return slug(text) || "section";
 }
 
 export function parseHeadings(content: string, fileId: string): MdHeading[] {
   const lines = content.split("\n");
   const flat: MdHeading[] = [];
-  const seen = new Map<string, number>();
+  // A fresh slugger per file mirrors rehypeSlug's per-document dedup counter.
+  const slugger = new GithubSlugger();
   let inCode = false;
   for (const line of lines) {
     if (line.trim().startsWith("```")) {
@@ -37,11 +38,7 @@ export function parseHeadings(content: string, fileId: string): MdHeading[] {
     if (!m) continue;
     const level = m[1].length;
     const text = m[2].trim();
-    let base = slugify(text);
-    if (!base) base = "section";
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    const id = count === 0 ? base : `${base}-${count}`;
+    const id = slugger.slug(text || "section");
     flat.push({ id, text, level, fileId, children: [] });
   }
   // build tree
@@ -54,6 +51,11 @@ export function parseHeadings(content: string, fileId: string): MdHeading[] {
     stack.push(h);
   }
   return root;
+}
+
+export function readingMinutes(content: string): number {
+  const words = content.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.round(words / 220));
 }
 
 export function flattenHeadings(headings: MdHeading[]): MdHeading[] {

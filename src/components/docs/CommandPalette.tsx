@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Command } from "cmdk";
+import GithubSlugger from "github-slugger";
 import { FileText, Hash, Search, Clock, X } from "lucide-react";
 import type { MdFile } from "@/lib/markdown-utils";
 
@@ -45,7 +46,9 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
       const fileNameMatch = file.name.toLowerCase().includes(q);
       let inCode = false;
       let currentHeading: { id: string; text: string } | null = null;
-      const seen = new Map<string, number>();
+      // Match rehypeSlug/parseHeadings exactly so result ids line up with the
+      // rendered DOM ids; otherwise navigation lands on a non-existent hash.
+      const slugger = new GithubSlugger();
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -58,14 +61,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
         const hm = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
         if (hm) {
           const text = hm[2].trim();
-          let base = text
-            .toLowerCase()
-            .replace(/[^\w\s-]/g, "")
-            .replace(/\s+/g, "-")
-            .replace(/-+/g, "-") || "section";
-          const c = seen.get(base) ?? 0;
-          seen.set(base, c + 1);
-          const id = c === 0 ? base : `${base}-${c}`;
+          const id = slugger.slug(text || "section");
           currentHeading = { id, text };
           if (text.toLowerCase().includes(q)) {
             hits.push({

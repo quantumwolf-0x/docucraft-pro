@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import gsap from "gsap";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -14,7 +15,6 @@ import {
   ArrowRight,
   ArrowUp,
   Clock,
-  ListTree,
   Pencil,
   Eye,
   Info,
@@ -23,10 +23,10 @@ import {
   AlertOctagon,
   StickyNote,
 } from "lucide-react";
-import type { MdFile, MdHeading } from "@/lib/markdown-utils";
-import { slugify, flattenHeadings } from "@/lib/markdown-utils";
+import type { MdFile } from "@/lib/markdown-utils";
+import { slugify } from "@/lib/markdown-utils";
 import { Mermaid } from "./Mermaid";
-import { detectEmbed, EmbedFrame } from "@/lib/media-embeds";
+import { detectEmbed, EmbedFrame, isVideoUrl, VideoPlayer } from "@/lib/media-embeds";
 import { Lightbox } from "./Lightbox";
 
 interface Props {
@@ -38,8 +38,15 @@ interface Props {
   scrollTargetId: string | null;
   highlightQuery: string | null;
   onContentChange: (fileId: string, content: string) => void;
-  focusMode: boolean;
+  chapterNumber: number;
+  totalChapters: number;
+  isComplete: boolean;
+  allComplete: boolean;
+  nextReadingMin: number | null;
+  onReadProgress: (fraction: number) => void;
 }
+
+const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
 
 export function MarkdownViewer({
   file,
@@ -50,7 +57,12 @@ export function MarkdownViewer({
   scrollTargetId,
   highlightQuery,
   onContentChange,
-  focusMode,
+  chapterNumber,
+  totalChapters,
+  isComplete,
+  allComplete,
+  nextReadingMin,
+  onReadProgress,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState(0);
@@ -62,6 +74,19 @@ export function MarkdownViewer({
   useEffect(() => {
     setDraft(file.content);
     setEditMode(false);
+  }, [file.id]);
+
+  // Gentle fade/rise when switching documents — reads as a settle, not a flash.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const ctx = gsap.fromTo(
+      containerRef.current,
+      { opacity: 0, y: 10 },
+      { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" },
+    );
+    return () => {
+      ctx.kill();
+    };
   }, [file.id]);
 
   // Autosave draft to parent
@@ -83,18 +108,25 @@ export function MarkdownViewer({
     }
   }, [scrollTargetId, file.id]);
 
+  // Reset to top only when the chapter changes with no pending target. Must NOT
+  // depend on scrollTargetId: clearing the target after a jump would otherwise
+  // yank the reader back to the top ~100ms after landing on the occurrence.
   useEffect(() => {
     if (!scrollTargetId) window.scrollTo({ top: 0 });
-  }, [file.id, scrollTargetId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file.id]);
 
-  // Scrollspy + progress
+  // Scrollspy, ambient progress, and earned completion. Completion is reported
+  // by how far the reader has actually scrolled — never by clicking a heading.
   useEffect(() => {
     const onScroll = () => {
       const doc = document.documentElement;
       const scrolled = window.scrollY;
       const max = doc.scrollHeight - window.innerHeight;
-      setProgress(max > 0 ? (scrolled / max) * 100 : 0);
+      const frac = max > 0 ? scrolled / max : 1;
+      setProgress(frac * 100);
       setShowTop(scrolled > 400);
+      onReadProgress(frac);
 
       const headings = containerRef.current?.querySelectorAll<HTMLElement>(
         "h1, h2, h3, h4, h5, h6",
@@ -110,7 +142,7 @@ export function MarkdownViewer({
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, [file.id, onActiveHeading, editMode]);
+  }, [file.id, onActiveHeading, onReadProgress, editMode]);
 
   // Save shortcut
   useEffect(() => {
@@ -165,44 +197,62 @@ export function MarkdownViewer({
       h5: (p: any) => <HeadingLink as="h5" {...p} highlight={highlightText} />,
       h6: (p: any) => <HeadingLink as="h6" {...p} highlight={highlightText} />,
       p: (p: any) => {
-        // Rich embed detection: paragraph containing a single autolink
+        // Rich embed detection: a paragraph that is a single bare autolink.
+        // Match on props.href rather than element type — the custom `a`
+        // override makes the child's type the component, not the string "a".
         const kids = Array.isArray(p.children) ? p.children : [p.children];
         const solo = kids.filter((c: any) => !(typeof c === "string" && !c.trim()));
-        if (solo.length === 1 && solo[0]?.type === "a") {
-          const href = solo[0].props?.href;
-          const inner = solo[0].props?.children;
+        const only = solo.length === 1 ? solo[0] : null;
+        const href = only?.props?.href;
+        if (href) {
+          const inner = only.props?.children;
           const text = typeof inner === "string" ? inner : Array.isArray(inner) ? inner.join("") : "";
-          if (href && (text === href || text === "")) {
+          if (text === href || text === "") {
             const embed = detectEmbed(href);
             if (embed) return <EmbedFrame embed={embed} />;
+            if (isVideoUrl(href)) return <VideoPlayer src={href} />;
           }
         }
         return <p {...p}>{walkChildren(p.children)}</p>;
       },
       blockquote: (p: any) => <Callout {...p} />,
       pre: (p: any) => <CodeBlock {...p} />,
-      img: (p: any) => (
-        <img
-          {...p}
-          loading="lazy"
-          onClick={() => setLightbox({ src: p.src, alt: p.alt })}
-          className="cursor-zoom-in"
-        />
-      ),
+      img: (p: any) => {
+        // ![alt](clip.mp4) renders a player; a `title` that is an image URL
+        // (![alt](clip.mp4 "thumb.jpg")) becomes the preview poster.
+        if (p.src && isVideoUrl(p.src)) {
+          const poster =
+            typeof p.title === "string" && /\.(png|jpe?g|webp|gif|avif)(\?.*)?$/i.test(p.title)
+              ? p.title
+              : undefined;
+          return <VideoPlayer src={p.src} poster={poster} />;
+        }
+        return (
+          <img
+            {...p}
+            loading="lazy"
+            onClick={() => setLightbox({ src: p.src, alt: p.alt })}
+            className="cursor-zoom-in"
+          />
+        );
+      },
       a: (p: any) => (
         <a {...p} target={p.href?.startsWith("http") ? "_blank" : undefined} rel="noreferrer">
           {walkChildren(p.children)}
         </a>
       ),
       li: (p: any) => <li {...p}>{walkChildren(p.children)}</li>,
+      table: (p: any) => (
+        <div className="docs-table-wrap">
+          <table {...p} />
+        </div>
+      ),
       td: (p: any) => <td {...p}>{walkChildren(p.children)}</td>,
       th: (p: any) => <th {...p}>{walkChildren(p.children)}</th>,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [highlightRegex],
   );
-
-  const flatHeadings = flattenHeadings(file.headings);
 
   return (
     <>
@@ -213,28 +263,35 @@ export function MarkdownViewer({
 
       {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
-      <div className={`mx-auto flex w-full ${focusMode ? "max-w-3xl" : "max-w-6xl"} gap-8 px-6 py-10 md:px-10 md:py-16`}>
-        <article
-          ref={containerRef}
-          className={`docs-prose min-w-0 flex-1 ${focusMode ? "mx-auto max-w-3xl" : ""}`}
-        >
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                {file.name}
-              </div>
-              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  {stats.readingMin} min read
+      <div
+        className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}
+      >
+        <article ref={containerRef} className="docs-prose mx-auto min-w-0 flex-1">
+          <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              {/* Chapter eyebrow: orientation — which chapter, of how many */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">
+                  Chapter {chapterNumber}
+                  <span className="text-muted-foreground"> of {totalChapters}</span>
                 </span>
+                {isComplete && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                    <Check className="h-3 w-3" strokeWidth={3} /> Read
+                  </span>
+                )}
+              </div>
+              <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="truncate">{stripExt(file.name)}</span>
                 <span>·</span>
-                <span>{stats.words.toLocaleString()} words</span>
+                <span className="inline-flex items-center gap-1">
+                  <Clock className="h-3 w-3" />≈ {stats.readingMin} min
+                </span>
               </div>
             </div>
             <button
               onClick={() => setEditMode((e) => !e)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
             >
               {editMode ? (
                 <>
@@ -284,56 +341,79 @@ export function MarkdownViewer({
             </ReactMarkdown>
           )}
 
+          {/* Natural stopping point — quiet acknowledgement, clear next step */}
           {!editMode && (
-            <nav className="mt-16 grid grid-cols-1 gap-3 border-t border-border pt-8 sm:grid-cols-2">
-              {prevFile ? (
-                <button
-                  onClick={() => onNavFile(prevFile.id)}
-                  className="group flex flex-col items-start gap-1 rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/50"
-                >
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <ArrowLeft className="h-3 w-3" /> Previous
+            <div className="mt-16 border-t border-border pt-8">
+              {isComplete && (
+                <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Check className="h-3 w-3" strokeWidth={3} />
                   </span>
-                  <span className="text-sm font-medium text-foreground">{prevFile.name}</span>
-                </button>
-              ) : (
-                <div />
+                  <span>
+                    <span className="font-medium text-foreground">{stripExt(file.name)}</span>{" "}
+                    complete
+                  </span>
+                </div>
               )}
+
               {nextFile ? (
                 <button
                   onClick={() => onNavFile(nextFile.id)}
-                  className="group flex flex-col items-end gap-1 rounded-lg border border-border p-4 text-right transition-colors hover:border-primary/50 hover:bg-accent/50 sm:col-start-2"
+                  className="group flex w-full items-center justify-between gap-4 rounded-xl border border-border p-5 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
                 >
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    Next <ArrowRight className="h-3 w-3" />
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Next chapter
+                    </span>
+                    <span className="mt-1 block truncate text-base font-semibold text-foreground">
+                      {stripExt(nextFile.name)}
+                    </span>
+                    {nextReadingMin != null && (
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        ≈ {nextReadingMin} min read
+                      </span>
+                    )}
                   </span>
-                  <span className="text-sm font-medium text-foreground">{nextFile.name}</span>
+                  <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
                 </button>
-              ) : null}
-            </nav>
+              ) : allComplete ? (
+                <div className="rounded-xl border border-border bg-muted/30 p-8 text-center">
+                  <span className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Check className="h-5 w-5" strokeWidth={3} />
+                  </span>
+                  <div className="text-base font-semibold text-foreground">
+                    Documentation completed
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    You&apos;ve finished all {totalChapters}{" "}
+                    {totalChapters === 1 ? "chapter" : "chapters"}.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                  You&apos;ve reached the end of this chapter.
+                </div>
+              )}
+
+              {prevFile && (
+                <button
+                  onClick={() => onNavFile(prevFile.id)}
+                  className="group mt-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+                  Previous: {stripExt(prevFile.name)}
+                </button>
+              )}
+            </div>
           )}
         </article>
-
-        {/* Right side ToC */}
-        {!focusMode && !editMode && flatHeadings.length > 2 && (
-          <aside className="sticky top-24 hidden h-[calc(100dvh-8rem)] w-56 shrink-0 overflow-y-auto text-sm xl:block">
-            <div className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              <ListTree className="h-3 w-3" /> On this page
-            </div>
-            <ul className="space-y-1">
-              {flatHeadings.map((h) => (
-                <TocLink key={h.id} h={h} />
-              ))}
-            </ul>
-          </aside>
-        )}
       </div>
 
       {showTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
           aria-label="Back to top"
-          className="fixed bottom-6 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 shadow-lg backdrop-blur transition-all hover:bg-accent"
+          className="fixed bottom-6 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 shadow-lg backdrop-blur transition-all hover:bg-accent active:scale-90"
         >
           <ArrowUp className="h-4 w-4" />
         </button>
@@ -342,36 +422,7 @@ export function MarkdownViewer({
   );
 }
 
-function TocLink({ h }: { h: MdHeading }) {
-  return (
-    <li>
-      <a
-        href={`#${h.id}`}
-        onClick={(e) => {
-          e.preventDefault();
-          const el = document.getElementById(h.id);
-          if (el) {
-            const y = el.getBoundingClientRect().top + window.scrollY - 80;
-            window.scrollTo({ top: y, behavior: "smooth" });
-            history.replaceState(null, "", `#${h.id}`);
-          }
-        }}
-        className="block truncate text-muted-foreground transition-colors hover:text-foreground"
-        style={{ paddingLeft: `${(h.level - 1) * 10}px`, fontSize: h.level > 2 ? 12 : 13 }}
-      >
-        {h.text}
-      </a>
-    </li>
-  );
-}
-
-function HeadingLink({
-  as: Tag,
-  children,
-  id,
-  highlight,
-  ...rest
-}: any) {
+function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
   const [copied, setCopied] = useState(false);
   const text = Array.isArray(children)
     ? children.map((c) => (typeof c === "string" ? c : "")).join("")

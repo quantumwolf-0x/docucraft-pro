@@ -12,4 +12,14 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    optimizeDeps: {
+      // Pre-bundle mermaid at cold start. It lazily imports its diagram parsers
+      // (flowDiagram, erDiagram, …) as dynamic imports; if Vite discovers them
+      // late and re-optimizes mid-session, the already-hashed chunk URLs 404
+      // with "Failed to fetch dynamically imported module". Forcing the include
+      // resolves them upfront so the hashes stay stable for the session.
+      include: ["mermaid"],
+    },
+  },
 });
