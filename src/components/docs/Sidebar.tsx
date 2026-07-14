@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Settings, Check, MoreVertical, Trash2, Pencil, Sun, Moon, Monitor, Home, Bookmark } from "lucide-react";
+import { ChevronRight, Settings, Check, MoreVertical, Trash2, Pencil, Sun, Moon, Monitor, Home, Bookmark, AlertTriangle, X } from "lucide-react";
 import { splitIntoSubtopics } from "@/lib/markdown-utils";
 import { Link } from "@tanstack/react-router";
 import { Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle, SheetClose } from "@/components/ui/sheet";
-import type { MdFile, MdHeading } from "@/lib/markdown-utils";
+import type { MdFile } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
 import type { ProgressMap } from "@/lib/reading-progress";
 
@@ -12,7 +12,6 @@ interface Props {
   activeFileId: string | null;
   activeHeadingId: string | null;
   progress: ProgressMap;
-  // Controlled so expanded/collapsed chapters persist and restore across sessions.
   expanded: Record<string, boolean>;
   onToggleFile: (fileId: string) => void;
   onSelect: (fileId: string, headingId?: string) => void;
@@ -22,6 +21,11 @@ interface Props {
   theme: "dark" | "light" | "system";
   onCycleTheme: () => void;
   bookmarks: { fileId: string; subtopicId: string; name: string }[];
+  currentWorkspaceName: string;
+  canDeleteWorkspace: boolean;
+  onRenameCurrentWorkspace: (name: string) => void;
+  onDeleteCurrentWorkspace: () => void;
+  onClearStorage: () => void;
 }
 
 export function Sidebar({
@@ -38,8 +42,14 @@ export function Sidebar({
   theme,
   onCycleTheme,
   bookmarks,
+  currentWorkspaceName,
+  canDeleteWorkspace,
+  onRenameCurrentWorkspace,
+  onDeleteCurrentWorkspace,
+  onClearStorage,
 }: Props) {
   const ThemeIcon = theme === "dark" ? Sun : theme === "light" ? Moon : Monitor;
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // Progressive disclosure: chapters stay collapsed unless the reader opens
   // them; the current chapter is expanded automatically. This keeps the
   // reader from facing hundreds of headings at once.
