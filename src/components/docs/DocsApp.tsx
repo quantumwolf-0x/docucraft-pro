@@ -621,6 +621,20 @@ export function DocsApp() {
     [refreshWorkspaceList],
   );
 
+  const clearAllStorage = useCallback(async () => {
+    try {
+      const list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
+      await Promise.all(list.map((w) => persistence.deleteWorkspace(w.id)));
+      try {
+        localStorage.clear();
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      window.location.reload();
+    }
+  }, []);
+
   // ---- home page data ----
   const recentItems = files
     .map((f) => ({ f, at: progress[f.name]?.lastReadAt ?? 0 }))
