@@ -696,15 +696,11 @@ export function DocsApp() {
         />
         <HomePage
           userName={userName}
-          isFirstVisit={firstVisitRef.current}
           onSubmitName={submitName}
-          resume={resume}
           recent={recentItems}
-          workspaces={workspaceItems}
           bookmarks={bookmarkItems}
           hasFiles={files.length > 0}
           onOpenFile={openFromHome}
-          onSwitchWorkspace={openWorkspaceFromHome}
           onUpload={() => inputRef.current?.click()}
         />
         <input
