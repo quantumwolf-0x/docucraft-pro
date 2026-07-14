@@ -202,9 +202,42 @@
 .docs-prose pre code { background: transparent; border: 0; padding: 0; font-size: inherit; }
 .docs-prose img { max-width: 100%; height: auto; border-radius: 0.5rem; margin: 1.25rem 0; }
 .docs-prose hr { margin: 2rem 0; border: 0; border-top: 1px solid var(--border); }
-.docs-prose table { width: 100%; border-collapse: collapse; margin: 1.25rem 0; font-size: 0.9rem; }
-.docs-prose th, .docs-prose td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); }
-.docs-prose th { font-weight: 600; background: var(--muted); }
+/* Tables: scrollable, rounded, zebra rows, hover feedback */
+.docs-table-wrap {
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+.docs-prose .docs-table-wrap table { margin: 0; }
+.docs-prose table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 1.5rem 0;
+  font-size: 0.9rem;
+}
+.docs-prose th, .docs-prose td {
+  text-align: left;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.docs-prose thead th {
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--muted) 60%, var(--background));
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.docs-prose tbody tr { transition: background-color 0.12s ease; }
+.docs-prose tbody tr:nth-child(even) { background: color-mix(in oklab, var(--muted) 35%, transparent); }
+.docs-prose tbody tr:hover { background: color-mix(in oklab, var(--primary) 6%, transparent); }
+.docs-prose tbody tr:last-child td { border-bottom: 0; }
+.docs-prose td + td, .docs-prose th + th { border-left: 1px solid color-mix(in oklab, var(--border) 55%, transparent); }
 .docs-prose input[type="checkbox"] { margin-right: 0.4rem; accent-color: var(--primary); }
 .docs-prose kbd {
   font-family: ui-monospace, monospace;
@@ -240,3 +273,16 @@
 
 /* Better dark-mode katex */
 .dark .katex { color: var(--foreground); }
+
+/* Mermaid diagrams render responsively inside the pan/zoom stage */
+.docs-mermaid svg { max-width: 100%; height: auto; display: block; }
+
+/* Persistent highlights via the CSS Custom Highlight API. Rendered without
+   mutating the DOM, so they survive React re-renders and span multiple nodes. */
+::highlight(dc-hl-0) { background-color: #fde047; color: #0a0a0a; }
+::highlight(dc-hl-1) { background-color: #86efac; color: #0a0a0a; }
+::highlight(dc-hl-2) { background-color: #93c5fd; color: #0a0a0a; }
+::highlight(dc-hl-3) { background-color: #f9a8d4; color: #0a0a0a; }
+::highlight(dc-hl-4) { background-color: #fdba74; color: #0a0a0a; }
+::highlight(dc-hl-5) { background-color: #d8b4fe; color: #0a0a0a; }
+::highlight(dc-query) { background-color: color-mix(in oklab, var(--primary) 30%, transparent); }

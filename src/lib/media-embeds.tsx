@@ -86,6 +86,35 @@ export function detectEmbed(url: string): Embed | null {
   }
 }
 
+const VIDEO_EXT = /\.(mp4|webm|ogg|ogv|mov|m4v)(\?.*)?$/i;
+
+/** True when the URL points at a directly playable video file. */
+export function isVideoUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    return VIDEO_EXT.test(new URL(url, "http://_").pathname);
+  } catch {
+    return VIDEO_EXT.test(url);
+  }
+}
+
+/** Native <video> player. `preload="metadata"` shows the first frame as a
+ *  lightweight preview; an explicit poster (thumbnail) is used when provided. */
+export function VideoPlayer({ src, poster }: { src: string; poster?: string }): ReactNode {
+  return (
+    <div className="my-6 overflow-hidden rounded-xl border border-border bg-black">
+      <video
+        src={src}
+        poster={poster}
+        controls
+        playsInline
+        preload="metadata"
+        className="mx-auto block max-h-[70vh] w-full"
+      />
+    </div>
+  );
+}
+
 function yt(id: string): Embed {
   return {
     src: `https://www.youtube.com/embed/${id}`,

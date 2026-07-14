@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import gsap from "gsap";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -14,55 +15,210 @@ import {
   ArrowRight,
   ArrowUp,
   Clock,
-  ListTree,
   Pencil,
   Eye,
+  Bookmark,
   Info,
   AlertTriangle,
   Lightbulb,
   AlertOctagon,
   StickyNote,
+  Tag,
+  Trash2,
+  X,
 } from "lucide-react";
-import type { MdFile, MdHeading } from "@/lib/markdown-utils";
-import { slugify, flattenHeadings } from "@/lib/markdown-utils";
+import type { MdFile } from "@/lib/markdown-utils";
+import { slugify } from "@/lib/markdown-utils";
 import { Mermaid } from "./Mermaid";
-import { detectEmbed, EmbedFrame } from "@/lib/media-embeds";
+import { detectEmbed, EmbedFrame, isVideoUrl, VideoPlayer } from "@/lib/media-embeds";
 import { Lightbox } from "./Lightbox";
+import { HL_COLORS, hlGroup, type Highlight } from "@/lib/dom-highlighter";
+import { getSelectionOffsets, buildRange, offsetFromPoint, firstTextRange } from "@/lib/text-offsets";
+import { splitIntoSubtopics } from "@/lib/markdown-utils";
 
 interface Props {
   file: MdFile;
   prevFile: MdFile | null;
   nextFile: MdFile | null;
-  onNavFile: (id: string) => void;
-  onActiveHeading: (id: string | null) => void;
-  scrollTargetId: string | null;
+  onNav: (fileId: string, subtopicId: string | null) => void;
+  activeSubtopicId: string | null;
   highlightQuery: string | null;
   onContentChange: (fileId: string, content: string) => void;
-  focusMode: boolean;
+  chapterNumber: number;
+  totalChapters: number;
+  isComplete: boolean;
+  allComplete: boolean;
+  nextReadingMin: number | null;
+  onReadProgress: (fraction: number) => void;
+  isBookmarked: boolean;
+  onToggleBookmark: () => void;
+  highlights: Highlight[];
+  onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">) => void;
+  onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
+  onRemoveHighlight: (id: string) => void;
 }
+
+const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
 
 export function MarkdownViewer({
   file,
   prevFile,
   nextFile,
-  onNavFile,
-  onActiveHeading,
-  scrollTargetId,
+  onNav,
+  activeSubtopicId,
   highlightQuery,
   onContentChange,
-  focusMode,
+  chapterNumber,
+  totalChapters,
+  isComplete,
+  allComplete,
+  nextReadingMin,
+  onReadProgress,
+  isBookmarked,
+  onToggleBookmark,
+  highlights,
+  onAddHighlight,
+  onUpdateHighlight,
+  onRemoveHighlight,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState(0);
   const [showTop, setShowTop] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState(file.content);
+  
+  const allChunks = useMemo(() => file.subtopics || splitIntoSubtopics(file.content, file.name), [file.subtopics, file.content, file.name]);
+  
+  const activeChunk = useMemo(() => {
+    return allChunks.find(s => s.id === activeSubtopicId) || allChunks[0] || { id: 'preamble', title: stripExt(file.name), content: file.content };
+  }, [allChunks, activeSubtopicId, file.content, file.name]);
+
+  const chunkIndex = allChunks.findIndex(s => s.id === activeChunk.id);
+  const isLastChunk = chunkIndex === allChunks.length - 1;
+  const prevChunk = chunkIndex > 0 ? allChunks[chunkIndex - 1] : null;
+  const nextChunk = chunkIndex >= 0 && chunkIndex < allChunks.length - 1 ? allChunks[chunkIndex + 1] : null;
+
+  const renderContent = useMemo(() => {
+    return activeChunk.content.replace(/^(#{1,2})\s+(.+?)\s*#*\s*\n?/, "");
+  }, [activeChunk.content]);
+
   const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
+
+  // Highlight menu: "create" from a fresh selection, or "edit" from clicking an
+  // existing highlight. A single popover serves both. Detached from the live
+  // Selection so typing a label doesn't dismiss it.
+  const contentRef = useRef<HTMLDivElement>(null);
+  type HlMenu =
+    | { mode: "create"; text: string; start: number; end: number; x: number; y: number; label: string }
+    | { mode: "edit"; hl: Highlight; x: number; y: number; label: string };
+  const [menu, setMenu] = useState<HlMenu | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const openCreateMenu = () => {
+    if (editMode || !contentRef.current) return;
+    const sel = getSelectionOffsets(contentRef.current);
+    if (!sel) return;
+    const range = window.getSelection()?.getRangeAt(0);
+    const r = range?.getBoundingClientRect();
+    setMenu({
+      mode: "create",
+      text: sel.text,
+      start: sel.start,
+      end: sel.end,
+      x: r ? r.left + r.width / 2 : window.innerWidth / 2,
+      y: r ? r.top : 120,
+      label: "",
+    });
+  };
+
+  const openEditMenu = (hl: Highlight, x: number, y: number) => {
+    setMenu({ mode: "edit", hl, x, y, label: hl.label ?? "" });
+  };
+
+  // Paint persistent highlights with the CSS Custom Highlight API — no DOM
+  // mutation, so React re-renders never wipe them and cross-node selections
+  // highlight correctly. Groups map to ::highlight(dc-hl-N) rules in the CSS.
+  useEffect(() => {
+    const container = contentRef.current;
+    const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
+      | Map<string, any>
+      | undefined;
+    if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
+
+    const groups: Record<string, Range[]> = {};
+    for (const hl of highlights) {
+      if (hl.subtopicId && hl.subtopicId !== activeChunk.id) continue;
+      const range =
+        typeof hl.start === "number" && typeof hl.end === "number"
+          ? buildRange(container, hl.start, hl.end)
+          : firstTextRange(container, hl.text);
+      if (!range || range.collapsed) continue;
+      const g = hlGroup(hl.color);
+      (groups[g] ||= []).push(range);
+    }
+
+    HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
+    for (const [g, ranges] of Object.entries(groups)) {
+      CSSH.set(g, new (window as any).Highlight(...ranges));
+    }
+    return () => {
+      HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
+    };
+  }, [highlights, activeChunk.id, renderContent, editMode]);
+
+  // Click inside the content: if the click lands on an existing highlight, open
+  // its edit popover (CSS highlights aren't DOM nodes, so we hit-test offsets).
+  const onContentClick = (e: React.MouseEvent) => {
+    if (editMode || !contentRef.current) return;
+    if (!window.getSelection()?.isCollapsed) return; // a drag-select, not a click
+    const off = offsetFromPoint(contentRef.current, e.clientX, e.clientY);
+    if (off == null) return;
+    const hit = highlights.find(
+      (h) =>
+        (!h.subtopicId || h.subtopicId === activeChunk.id) &&
+        typeof h.start === "number" &&
+        typeof h.end === "number" &&
+        off >= h.start &&
+        off < h.end,
+    );
+    if (hit) openEditMenu(hit, e.clientX, e.clientY);
+  };
+
+  // Close the menu on outside click / Escape (but keep it open while the reader
+  // interacts with the popover itself).
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(null);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  useEffect(() => setMenu(null), [activeChunk.id, file.id, editMode]);
 
   useEffect(() => {
     setDraft(file.content);
     setEditMode(false);
   }, [file.id]);
+
+  // Gentle fade/rise when switching documents — reads as a settle, not a flash.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const ctx = gsap.fromTo(
+      containerRef.current,
+      { opacity: 0, y: 10 },
+      { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" },
+    );
+    return () => {
+      ctx.kill();
+    };
+  }, [activeChunk.id, file.id]);
 
   // Autosave draft to parent
   useEffect(() => {
@@ -71,46 +227,27 @@ export function MarkdownViewer({
     return () => clearTimeout(t);
   }, [draft, editMode, file.id, onContentChange]);
 
-  // Scroll to target
+  // Reset to top only when the chapter changes
   useEffect(() => {
-    if (!scrollTargetId) return;
-    const el = document.getElementById(scrollTargetId);
-    if (el) {
-      const y = el.getBoundingClientRect().top + window.scrollY - 80;
-      window.scrollTo({ top: y, behavior: "smooth" });
-      el.classList.add("docs-flash");
-      setTimeout(() => el.classList.remove("docs-flash"), 1600);
-    }
-  }, [scrollTargetId, file.id]);
+    window.scrollTo({ top: 0 });
+  }, [activeChunk.id, file.id]);
 
-  useEffect(() => {
-    if (!scrollTargetId) window.scrollTo({ top: 0 });
-  }, [file.id, scrollTargetId]);
-
-  // Scrollspy + progress
+  // Scrollspy, ambient progress, and earned completion. Completion is reported
+  // by how far the reader has actually scrolled.
   useEffect(() => {
     const onScroll = () => {
       const doc = document.documentElement;
       const scrolled = window.scrollY;
       const max = doc.scrollHeight - window.innerHeight;
-      setProgress(max > 0 ? (scrolled / max) * 100 : 0);
+      const frac = max > 0 ? scrolled / max : 1;
+      setProgress(frac * 100);
       setShowTop(scrolled > 400);
-
-      const headings = containerRef.current?.querySelectorAll<HTMLElement>(
-        "h1, h2, h3, h4, h5, h6",
-      );
-      if (!headings) return;
-      let current: string | null = null;
-      for (const h of Array.from(headings)) {
-        if (h.getBoundingClientRect().top < 120) current = h.id;
-        else break;
-      }
-      onActiveHeading(current);
+      onReadProgress(frac);
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, [file.id, onActiveHeading, editMode]);
+  }, [file.id, activeChunk.id, onReadProgress, editMode]);
 
   // Save shortcut
   useEffect(() => {
@@ -125,22 +262,21 @@ export function MarkdownViewer({
   }, [draft, editMode, file.id, onContentChange]);
 
   const stats = useMemo(() => {
-    const words = file.content.trim().split(/\s+/).filter(Boolean).length;
+    const words = activeChunk.content.trim().split(/\s+/).filter(Boolean).length;
     const readingMin = Math.max(1, Math.round(words / 220));
     return { words, readingMin };
-  }, [file.content]);
+  }, [activeChunk.content]);
 
-  const highlightRegex = useMemo(() => {
-    if (!highlightQuery) return null;
-    const escaped = highlightQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(${escaped})`, "gi");
-  }, [highlightQuery]);
-
-  const highlightText = (text: string) => {
-    if (!highlightRegex) return text;
-    const parts = text.split(highlightRegex);
+  // Search-query highlighting stays a lightweight React wrap. Persistent
+  // highlights are painted via the CSS Custom Highlight API instead (see the
+  // effect below) so they survive re-renders and span multiple elements.
+  const highlightText = (text: string): any => {
+    const q = highlightQuery?.trim();
+    if (!q || !text) return text;
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const parts = text.split(new RegExp(`(${escaped})`, "gi"));
     return parts.map((p, i) =>
-      highlightRegex.test(p) ? (
+      p.toLowerCase() === q.toLowerCase() ? (
         <mark key={i} className="rounded bg-primary/25 px-0.5 text-foreground">
           {p}
         </mark>
@@ -165,47 +301,189 @@ export function MarkdownViewer({
       h5: (p: any) => <HeadingLink as="h5" {...p} highlight={highlightText} />,
       h6: (p: any) => <HeadingLink as="h6" {...p} highlight={highlightText} />,
       p: (p: any) => {
-        // Rich embed detection: paragraph containing a single autolink
+        // Rich embed detection: a paragraph that is a single bare autolink.
+        // Match on props.href rather than element type — the custom `a`
+        // override makes the child's type the component, not the string "a".
         const kids = Array.isArray(p.children) ? p.children : [p.children];
         const solo = kids.filter((c: any) => !(typeof c === "string" && !c.trim()));
-        if (solo.length === 1 && solo[0]?.type === "a") {
-          const href = solo[0].props?.href;
-          const inner = solo[0].props?.children;
+        const only = solo.length === 1 ? solo[0] : null;
+        const href = only?.props?.href;
+        if (href) {
+          const inner = only.props?.children;
           const text = typeof inner === "string" ? inner : Array.isArray(inner) ? inner.join("") : "";
-          if (href && (text === href || text === "")) {
+          if (text === href || text === "") {
             const embed = detectEmbed(href);
             if (embed) return <EmbedFrame embed={embed} />;
+            if (isVideoUrl(href)) return <VideoPlayer src={href} />;
           }
         }
         return <p {...p}>{walkChildren(p.children)}</p>;
       },
       blockquote: (p: any) => <Callout {...p} />,
       pre: (p: any) => <CodeBlock {...p} />,
-      img: (p: any) => (
-        <img
-          {...p}
-          loading="lazy"
-          onClick={() => setLightbox({ src: p.src, alt: p.alt })}
-          className="cursor-zoom-in"
-        />
-      ),
+      img: (p: any) => {
+        // ![alt](clip.mp4) renders a player; a `title` that is an image URL
+        // (![alt](clip.mp4 "thumb.jpg")) becomes the preview poster.
+        if (p.src && isVideoUrl(p.src)) {
+          const poster =
+            typeof p.title === "string" && /\.(png|jpe?g|webp|gif|avif)(\?.*)?$/i.test(p.title)
+              ? p.title
+              : undefined;
+          return <VideoPlayer src={p.src} poster={poster} />;
+        }
+        return (
+          <img
+            {...p}
+            loading="lazy"
+            onClick={() => setLightbox({ src: p.src, alt: p.alt })}
+            className="cursor-zoom-in"
+          />
+        );
+      },
       a: (p: any) => (
         <a {...p} target={p.href?.startsWith("http") ? "_blank" : undefined} rel="noreferrer">
           {walkChildren(p.children)}
         </a>
       ),
       li: (p: any) => <li {...p}>{walkChildren(p.children)}</li>,
+      table: (p: any) => (
+        <div className="docs-table-wrap">
+          <table {...p} />
+        </div>
+      ),
       td: (p: any) => <td {...p}>{walkChildren(p.children)}</td>,
       th: (p: any) => <th {...p}>{walkChildren(p.children)}</th>,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [highlightRegex],
+    [highlights, highlightQuery],
   );
-
-  const flatHeadings = flattenHeadings(file.headings);
 
   return (
     <>
+      {menu && !editMode && (
+        <div
+          ref={menuRef}
+          className="fixed z-[60] w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
+          style={{ top: Math.max(56, menu.y - 12), left: menu.x }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="mb-2 flex items-center justify-between px-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {menu.mode === "create" ? "Highlight" : "Edit highlight"}
+            </span>
+            <button
+              onClick={() => setMenu(null)}
+              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+              aria-label="Close"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="mb-2 flex items-center gap-1.5 px-1">
+            {HL_COLORS.map((color) => {
+              const active = menu.mode === "edit" && menu.hl.color === color;
+              return (
+                <button
+                  key={color}
+                  aria-label={`Highlight ${color}`}
+                  className={`h-6 w-6 rounded-full transition-transform hover:scale-110 ${
+                    active ? "ring-2 ring-foreground ring-offset-1 ring-offset-popover" : "border border-border/60"
+                  }`}
+                  style={{ backgroundColor: color }}
+                  onClick={() => {
+                    if (menu.mode === "create") {
+                      onAddHighlight({
+                        text: menu.text,
+                        color,
+                        label: menu.label.trim() || undefined,
+                        subtopicId: activeChunk.id,
+                        start: menu.start,
+                        end: menu.end,
+                      });
+                      window.getSelection()?.removeAllRanges();
+                    } else {
+                      onUpdateHighlight(menu.hl.id, { color });
+                    }
+                    setMenu(null);
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          <div className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2">
+            <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <input
+              value={menu.label}
+              onChange={(e) => setMenu((m) => (m ? { ...m, label: e.target.value } : m))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (menu.mode === "create") {
+                    onAddHighlight({
+                      text: menu.text,
+                      color: HL_COLORS[0],
+                      label: menu.label.trim() || undefined,
+                      subtopicId: activeChunk.id,
+                      start: menu.start,
+                      end: menu.end,
+                    });
+                    window.getSelection()?.removeAllRanges();
+                  } else {
+                    onUpdateHighlight(menu.hl.id, { label: menu.label.trim() || undefined });
+                  }
+                  setMenu(null);
+                }
+              }}
+              placeholder="Add a label (optional)"
+              className="w-full bg-transparent py-1.5 text-xs outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(menu.mode === "create" ? menu.text : menu.hl.text);
+                setMenu(null);
+              }}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Copy className="h-3.5 w-3.5" /> Copy
+            </button>
+            {menu.mode === "edit" && (
+              <button
+                onClick={() => {
+                  onRemoveHighlight(menu.hl.id);
+                  setMenu(null);
+                }}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Remove
+              </button>
+            )}
+            {menu.mode === "create" && (
+              <button
+                onClick={() => {
+                  onAddHighlight({
+                    text: menu.text,
+                    color: HL_COLORS[0],
+                    label: menu.label.trim() || undefined,
+                    subtopicId: activeChunk.id,
+                    start: menu.start,
+                    end: menu.end,
+                  });
+                  window.getSelection()?.removeAllRanges();
+                  setMenu(null);
+                }}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90"
+              >
+                Highlight
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div
         className="fixed left-0 right-0 top-16 z-40 h-0.5 bg-primary/80 transition-transform origin-left"
         style={{ transform: `scaleX(${progress / 100})` }}
@@ -213,39 +491,63 @@ export function MarkdownViewer({
 
       {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
-      <div className={`mx-auto flex w-full ${focusMode ? "max-w-3xl" : "max-w-6xl"} gap-8 px-6 py-10 md:px-10 md:py-16`}>
+      <div
+        className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}
+      >
         <article
           ref={containerRef}
-          className={`docs-prose min-w-0 flex-1 ${focusMode ? "mx-auto max-w-3xl" : ""}`}
+          onMouseUp={openCreateMenu}
+          className="docs-prose mx-auto min-w-0 flex-1"
         >
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                {file.name}
-              </div>
-              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  {stats.readingMin} min read
+          <div className="mb-8">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">
+                {stripExt(file.name)}
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-muted/50 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                <Clock className="h-3 w-3" /> ≈ {stats.readingMin} min read
+              </span>
+              {progress > 90 && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                  <Check className="h-3 w-3" strokeWidth={3} /> Read
                 </span>
-                <span>·</span>
-                <span>{stats.words.toLocaleString()} words</span>
+              )}
+            </div>
+
+            <div className="flex items-start justify-between gap-4">
+              <h1 className="min-w-0 flex-1 text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words">
+                {activeChunk.title}
+              </h1>
+              
+              <div className="mt-1.5 flex shrink-0 items-center gap-2">
+                <button
+                  onClick={onToggleBookmark}
+                  aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
+                  title={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
+                  className={`inline-flex items-center justify-center rounded-md border border-border bg-background p-2 transition-colors hover:border-primary/40 active:scale-95 ${
+                    isBookmarked ? "text-primary" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Bookmark
+                    className={`h-3.5 w-3.5 ${isBookmarked ? "fill-primary" : ""}`}
+                  />
+                </button>
+                <button
+                  onClick={() => setEditMode((e) => !e)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
+                >
+                  {editMode ? (
+                    <>
+                      <Eye className="h-3.5 w-3.5" /> Preview
+                    </>
+                  ) : (
+                    <>
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </>
+                  )}
+                </button>
               </div>
             </div>
-            <button
-              onClick={() => setEditMode((e) => !e)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-            >
-              {editMode ? (
-                <>
-                  <Eye className="h-3.5 w-3.5" /> Preview
-                </>
-              ) : (
-                <>
-                  <Pencil className="h-3.5 w-3.5" /> Edit
-                </>
-              )}
-            </button>
           </div>
 
           {editMode ? (
@@ -271,69 +573,119 @@ export function MarkdownViewer({
               </div>
             </div>
           ) : (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[
-                rehypeSlug,
-                rehypeKatex,
-                [rehypeHighlight, { detect: true, ignoreMissing: true }],
-              ]}
-              components={components}
-            >
-              {file.content}
-            </ReactMarkdown>
+            <div ref={contentRef} onClick={onContentClick}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[
+                  rehypeSlug,
+                  rehypeKatex,
+                  [rehypeHighlight, { detect: true, ignoreMissing: true }],
+                ]}
+                components={components}
+              >
+                {renderContent}
+              </ReactMarkdown>
+            </div>
           )}
 
+          {/* Natural stopping point — quiet acknowledgement, clear next step */}
           {!editMode && (
-            <nav className="mt-16 grid grid-cols-1 gap-3 border-t border-border pt-8 sm:grid-cols-2">
-              {prevFile ? (
-                <button
-                  onClick={() => onNavFile(prevFile.id)}
-                  className="group flex flex-col items-start gap-1 rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/50 hover:bg-accent/50"
-                >
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <ArrowLeft className="h-3 w-3" /> Previous
+            <div className="mt-16 border-t border-border pt-8">
+              {isLastChunk && (
+                <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Check className="h-3 w-3" strokeWidth={3} />
                   </span>
-                  <span className="text-sm font-medium text-foreground">{prevFile.name}</span>
-                </button>
-              ) : (
-                <div />
+                  <span>
+                    <span className="font-medium text-foreground">{stripExt(file.name)}</span>{" "}
+                    Documentation complete
+                  </span>
+                </div>
               )}
-              {nextFile ? (
+
+              {nextChunk ? (
                 <button
-                  onClick={() => onNavFile(nextFile.id)}
-                  className="group flex flex-col items-end gap-1 rounded-lg border border-border p-4 text-right transition-colors hover:border-primary/50 hover:bg-accent/50 sm:col-start-2"
+                  onClick={() => onNav(file.id, nextChunk.id)}
+                  className="group flex w-full items-center justify-between gap-4 rounded-xl border border-border p-5 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
                 >
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    Next <ArrowRight className="h-3 w-3" />
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Next topic
+                    </span>
+                    <span className="mt-1 block truncate text-base font-semibold text-foreground">
+                      {nextChunk.title}
+                    </span>
                   </span>
-                  <span className="text-sm font-medium text-foreground">{nextFile.name}</span>
+                  <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
                 </button>
-              ) : null}
-            </nav>
+              ) : nextFile ? (
+                <button
+                  onClick={() => onNav(nextFile.id, null)}
+                  className="group flex w-full items-center justify-between gap-4 rounded-xl border border-border p-5 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Next chapter
+                    </span>
+                    <span className="mt-1 block truncate text-base font-semibold text-foreground">
+                      {stripExt(nextFile.name)}
+                    </span>
+                    {nextReadingMin != null && (
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        ≈ {nextReadingMin} min read
+                      </span>
+                    )}
+                  </span>
+                  <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+                </button>
+              ) : allComplete ? (
+                <div className="rounded-xl border border-border bg-muted/30 p-8 text-center">
+                  <span className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Check className="h-5 w-5" strokeWidth={3} />
+                  </span>
+                  <div className="text-base font-semibold text-foreground">
+                    Documentation completed
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    You&apos;ve finished all {totalChapters}{" "}
+                    {totalChapters === 1 ? "chapter" : "chapters"}.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                  You&apos;ve reached the end of this chapter.
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-col gap-2 items-start">
+                {prevChunk ? (
+                  <button
+                    onClick={() => onNav(file.id, prevChunk.id)}
+                    className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+                    Previous topic: {prevChunk.title}
+                  </button>
+                ) : prevFile ? (
+                  <button
+                    onClick={() => onNav(prevFile.id, null)}
+                    className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+                    Previous chapter: {stripExt(prevFile.name)}
+                  </button>
+                ) : null}
+              </div>
+            </div>
           )}
         </article>
-
-        {/* Right side ToC */}
-        {!focusMode && !editMode && flatHeadings.length > 2 && (
-          <aside className="sticky top-24 hidden h-[calc(100dvh-8rem)] w-56 shrink-0 overflow-y-auto text-sm xl:block">
-            <div className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              <ListTree className="h-3 w-3" /> On this page
-            </div>
-            <ul className="space-y-1">
-              {flatHeadings.map((h) => (
-                <TocLink key={h.id} h={h} />
-              ))}
-            </ul>
-          </aside>
-        )}
       </div>
 
       {showTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
           aria-label="Back to top"
-          className="fixed bottom-6 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 shadow-lg backdrop-blur transition-all hover:bg-accent"
+          className="fixed bottom-6 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 shadow-lg backdrop-blur transition-all hover:bg-accent active:scale-90"
         >
           <ArrowUp className="h-4 w-4" />
         </button>
@@ -342,36 +694,7 @@ export function MarkdownViewer({
   );
 }
 
-function TocLink({ h }: { h: MdHeading }) {
-  return (
-    <li>
-      <a
-        href={`#${h.id}`}
-        onClick={(e) => {
-          e.preventDefault();
-          const el = document.getElementById(h.id);
-          if (el) {
-            const y = el.getBoundingClientRect().top + window.scrollY - 80;
-            window.scrollTo({ top: y, behavior: "smooth" });
-            history.replaceState(null, "", `#${h.id}`);
-          }
-        }}
-        className="block truncate text-muted-foreground transition-colors hover:text-foreground"
-        style={{ paddingLeft: `${(h.level - 1) * 10}px`, fontSize: h.level > 2 ? 12 : 13 }}
-      >
-        {h.text}
-      </a>
-    </li>
-  );
-}
-
-function HeadingLink({
-  as: Tag,
-  children,
-  id,
-  highlight,
-  ...rest
-}: any) {
+function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
   const [copied, setCopied] = useState(false);
   const text = Array.isArray(children)
     ? children.map((c) => (typeof c === "string" ? c : "")).join("")
@@ -416,11 +739,11 @@ function CodeBlock({ children, ...rest }: any) {
 
   return (
     <div className="group relative my-6">
-      {lang && (
+      {/* {lang && (
         <div className="absolute left-3 top-2 z-10 rounded bg-background/60 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground backdrop-blur">
           {lang}
         </div>
-      )}
+      )} */}
       <button
         onClick={() => {
           const code = ref.current?.innerText ?? "";
