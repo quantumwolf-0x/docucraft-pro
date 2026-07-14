@@ -75,6 +75,7 @@ export function HomePage({
   onUpload,
 }: Props) {
   const [draft, setDraft] = useState("");
+  const [showName, setShowName] = useState(false);
 
   const greeting = useMemo(() => {
     const pool = resume ? LEFT_OFF : isFirstVisit ? FIRST_TIME : RETURNING;
@@ -82,6 +83,41 @@ export function HomePage({
     return msg.replace("{name}", userName ?? "there");
     // Re-roll only when the state that drives the message changes.
   }, [userName, isFirstVisit, !!resume]);
+
+  // Fresh user: no name saved, no files, no bookmarks. Show an extremely
+  // minimal welcome — a single line of intent and one CTA to begin.
+  const isFresh =
+    !userName && !hasFiles && bookmarks.length === 0 && recent.length === 0;
+
+  if (isFresh && !showName) {
+    return (
+      <div className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-md flex-col items-center justify-center px-6 py-16 text-center">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          Markdown Docs
+        </div>
+        <h1 className="mt-4 text-4xl font-bold tracking-tight text-foreground md:text-5xl">
+          Welcome.
+        </h1>
+        <p className="mt-4 max-w-sm text-sm text-muted-foreground">
+          A calm, book-like reader for your Markdown files. Everything stays on
+          this device.
+        </p>
+        <button
+          onClick={onUpload}
+          className="mt-10 inline-flex items-center gap-2 rounded-full bg-foreground px-6 py-3 text-sm font-medium text-background transition-opacity hover:opacity-90"
+        >
+          Get started
+          <ArrowRight className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => setShowName(true)}
+          className="mt-4 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Personalize with your name
+        </button>
+      </div>
+    );
+  }
 
   // No name yet → ask once. Same input styling as the app's search field.
   if (!userName) {
