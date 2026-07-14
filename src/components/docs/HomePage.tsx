@@ -1,28 +1,27 @@
-import { useEffect, useState } from "react";
-import { ArrowRight, Clock, Bookmark, FileText, Upload, Check } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Clock, FileText, FolderOpen, Upload } from "lucide-react";
 
-export interface RecentItem {
+export interface WorkspaceFileItem {
   id: string;
   name: string;
   minutes: number;
-  progress: number;
-  completed: boolean;
 }
 
-export interface BookmarkItem {
-  fileId: string;
-  subtopicId: string;
+export interface WorkspaceItem {
+  id: string;
   name: string;
+  current: boolean;
 }
 
 interface Props {
   userName: string | null;
   onSubmitName: (name: string) => void;
-  recent: RecentItem[];
-  bookmarks: BookmarkItem[];
-  hasFiles: boolean;
+  files: WorkspaceFileItem[];
+  workspaces: WorkspaceItem[];
   onOpenFile: (fileId: string, subtopicId?: string) => void;
+  onOpenWorkspace: (workspaceId: string) => void;
   onUpload: () => void;
+  onFilesDrop?: (files: FileList) => void;
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
@@ -30,123 +29,130 @@ const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "")
 export function HomePage({
   userName,
   onSubmitName,
-  recent,
-  bookmarks,
-  hasFiles,
+  files,
+  workspaces,
   onOpenFile,
+  onOpenWorkspace,
   onUpload,
+  onFilesDrop,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [showModal, setShowModal] = useState(!userName);
+  const [drag, setDrag] = useState(false);
 
   useEffect(() => {
     if (!userName) setShowModal(true);
   }, [userName]);
 
+
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const v = draft.trim();
-    if (!v) return;
-    onSubmitName(v);
+    const value = draft.trim();
+    if (!value) return;
+    onSubmitName(value);
     setShowModal(false);
   };
 
-  // ----- Content -----
   const displayName = userName ?? "there";
 
   return (
     <>
-      <div className="mx-auto w-full max-w-3xl px-6 py-16 md:px-10 md:py-24">
-        <h1 className="text-4xl font-bold tracking-tight text-foreground md:text-5xl">
-          Welcome, {displayName}.
-        </h1>
+      <main className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-4xl flex-col px-6 pb-8 pt-14 md:px-10 md:pt-20">
+        <header className="max-w-2xl">
+          <h1 className="mt-3 text-2xl font-bold tracking-[-0.04em] text-foreground md:text-4xl">
+            Welcome, {displayName}.
+          </h1>
+        </header>
 
-        {!hasFiles ? (
-          <>
-            <p className="mt-4 text-base text-muted-foreground">
-              Nothing here yet. Add a Markdown file to get started.
-            </p>
-            <button
-              onClick={onUpload}
-              className="mt-10 inline-flex items-center gap-2 rounded-full bg-foreground px-6 py-3 text-sm font-medium text-background transition-opacity hover:opacity-90"
+        <div
+          className="mt-10"
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDrag(true);
+          }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            if (e.dataTransfer.files.length > 0) onFilesDrop?.(e.dataTransfer.files);
+          }}
+        >
+          <button
+            onClick={onUpload}
+            className={`group relative flex w-full overflow-hidden rounded-2xl border p-5 text-left shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${
+              drag
+                ? "border-primary bg-primary text-primary-foreground ring-4 ring-primary/15"
+                : "border-foreground/10 bg-foreground text-background"
+            }`}
+          >
+            <span className="pointer-events-none absolute -right-7 -top-10 h-32 w-32 rounded-full border border-background/15" />
+            <span className="pointer-events-none absolute right-12 top-10 h-16 w-16 rounded-full border border-background/10" />
+            <span className="relative flex min-w-0 flex-1 items-center gap-4">
+              <span className="rounded-xl bg-background/10 p-3 text-background ring-1 ring-inset ring-background/15 transition-transform duration-200 group-hover:scale-105">
+                <Upload className="h-5 w-5" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-base font-semibold">Add something to read</span>
+                <span className="mt-1 block text-sm text-background/65">
+                  Drop Markdown files here or choose them from your computer.
+                </span>
+              </span>
+            </span>
+            <span className="relative ml-4 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-background text-foreground transition-transform duration-200 group-hover:translate-x-1">
+              <ArrowRight className="h-4 w-4" />
+            </span>
+          </button>
+        </div>
+
+
+
+        <section className="mt-12">
+          <div className="mb-4 flex items-baseline justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight text-foreground">Documents</h2>
+              {/* <p className="mt-1 text-sm text-muted-foreground">
+                Files in your current workspace.
+              </p> */}
+            </div>
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              {files.length}
+            </span>
+          </div>
+
+          {files.length > 0 && (
+            <div
+              className="-my-4 flex snap-x gap-3 overflow-x-auto py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              aria-label="Documents"
             >
-              <Upload className="h-4 w-4" />
-              Add Markdown file
-            </button>
-          </>
-        ) : (
-          <>
-            <p className="mt-3 text-base text-muted-foreground">
-              Pick up where you left off.
-            </p>
-
-            {recent.length > 0 && (
-              <Section label="Continue reading">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {recent.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => onOpenFile(f.id)}
-                      className="group flex flex-col gap-2 rounded-xl border border-border p-4 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
-                    >
-                      <div className="flex items-start gap-2">
-                        <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                          {stripExt(f.name)}
+              {files.map((item) => (
+                  <button
+                    key={`file-${item.id}`}
+                    onClick={() => onOpenFile(item.id)}
+                    className="group flex aspect-square w-36 shrink-0 snap-start flex-col justify-between rounded-xl border border-border bg-card p-3.5 text-left shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:w-40"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <FileText className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="flex items-end justify-between gap-2">
+                      <span className="min-w-0">
+                        <span className="line-clamp-2 text-sm font-semibold leading-snug text-foreground group-hover:text-primary">
+                          {stripExt(item.name)}
                         </span>
-                        {f.completed && (
-                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                            <Check className="h-2.5 w-2.5" strokeWidth={3} />
-                          </span>
-                        )}
-                      </div>
-                      <div className="h-1 overflow-hidden rounded-full bg-border">
-                        <div
-                          className="h-full rounded-full bg-primary transition-all"
-                          style={{ width: `${Math.round(Math.min(1, f.progress) * 100)}%` }}
-                        />
-                      </div>
-                      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                        <Clock className="h-3 w-3" />≈ {f.minutes} min
+                        <span className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Clock className="h-3.5 w-3.5" />
+                          {item.minutes} min read
+                        </span>
                       </span>
-                    </button>
-                  ))}
-                </div>
-              </Section>
-            )}
+                      <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+                    </div>
+                  </button>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
 
-            {bookmarks.length > 0 && (
-              <Section label="Bookmarks">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {bookmarks.map((b, i) => (
-                    <button
-                      key={i}
-                      onClick={() => onOpenFile(b.fileId, b.subtopicId)}
-                      className="group flex items-center gap-3 rounded-xl border border-border p-4 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
-                    >
-                      <Bookmark className="h-4 w-4 shrink-0 fill-primary text-primary" />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                        {b.name}
-                      </span>
-                      <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                    </button>
-                  ))}
-                </div>
-              </Section>
-            )}
-
-            <button
-              onClick={onUpload}
-              className="mt-10 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border py-6 text-sm font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-            >
-              <Upload className="h-4 w-4" />
-              Add more Markdown files
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* Name modal — shown once on first visit */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-6 shadow-2xl">
@@ -180,16 +186,5 @@ export function HomePage({
         </div>
       )}
     </>
-  );
-}
-
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <section className="mt-10">
-      <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      {children}
-    </section>
   );
 }

@@ -79,6 +79,26 @@ function request<T>(
   );
 }
 
+async function deleteDatabase(): Promise<void> {
+  const openDatabase = dbPromise;
+  dbPromise = null;
+
+  try {
+    (await openDatabase)?.close();
+  } catch {
+    // The database may never have opened; deletion can still proceed.
+  }
+
+  if (typeof indexedDB === "undefined") return;
+
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error ?? new Error("Could not delete local database"));
+    req.onblocked = () => reject(new Error("Close DocuCraft in other tabs before clearing storage"));
+  });
+}
+
 export const persistence = {
   getWorkspace(id: string) {
     return request<WorkspaceRecord | undefined>("readonly", (s) => s.get(id));
@@ -91,6 +111,12 @@ export const persistence = {
   },
   listWorkspaces() {
     return request<WorkspaceRecord[]>("readonly", (s) => s.getAll());
+  },
+  clearAll() {
+    return request<undefined>("readwrite", (s) => s.clear()).then(() => {});
+  },
+  destroy() {
+    return deleteDatabase();
   },
 };
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Plus, Download, Upload, Trash2, Check, FolderOpen } from "lucide-react";
+import { ChevronDown, Plus, Download, Upload, Trash2, Check, FolderOpen, CheckCircle2 } from "lucide-react";
 
 interface WorkspaceLite {
   id: string;
@@ -10,7 +10,7 @@ interface Props {
   workspaces: WorkspaceLite[];
   currentId: string | null;
   onSwitch: (id: string) => void;
-  onNew: () => void;
+  onNew: (name?: string) => void;
   onImport: (file: File) => void;
   onExport: () => void;
   onDelete: (id: string) => void;
@@ -28,11 +28,17 @@ export function WorkspaceMenu({
   onRename,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [newName, setNewName] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setIsCreating(false);
+      setNewName("");
+      return;
+    }
     const onDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
@@ -96,19 +102,59 @@ export function WorkspaceMenu({
                 )}
               </div>
             ))}
+
+            {isCreating && (
+              <div className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md bg-accent/50">
+                <Check className="h-3.5 w-3.5 shrink-0 opacity-0" />
+                <input
+                  autoFocus
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      onNew(newName.trim() || undefined);
+                      setIsCreating(false);
+                      setNewName("");
+                      setOpen(false);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsCreating(false);
+                      setNewName("");
+                    }
+                  }}
+                  placeholder="Workspace name..."
+                  className="flex-1 min-w-0 bg-transparent outline-none text-sm placeholder:text-muted-foreground/60"
+                />
+                <button
+                  onClick={() => {
+                    onNew(newName.trim() || undefined);
+                    setIsCreating(false);
+                    setNewName("");
+                    setOpen(false);
+                  }}
+                  className="flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Save
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-1 border-t border-border p-1">
-            <button
-              onClick={() => {
-                onNew();
-                setOpen(false);
-              }}
-              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Plus className="h-4 w-4" />
-              <span>New</span>
-            </button>
+            {!isCreating && (
+              <button
+                onClick={() => {
+                  setIsCreating(true);
+                }}
+                className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Plus className="h-4 w-4" />
+                <span>New</span>
+              </button>
+            )}
             <button
               onClick={() => fileRef.current?.click()}
               className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

@@ -14,6 +14,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  ChevronRight,
   Clock,
   Pencil,
   Eye,
@@ -44,18 +45,14 @@ interface Props {
   activeSubtopicId: string | null;
   highlightQuery: string | null;
   onContentChange: (fileId: string, content: string) => void;
-  chapterNumber: number;
-  totalChapters: number;
-  isComplete: boolean;
-  allComplete: boolean;
   nextReadingMin: number | null;
-  onReadProgress: (fraction: number) => void;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   highlights: Highlight[];
   onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">) => void;
   onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
   onRemoveHighlight: (id: string) => void;
+  onHome?: () => void;
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
@@ -68,18 +65,14 @@ export function MarkdownViewer({
   activeSubtopicId,
   highlightQuery,
   onContentChange,
-  chapterNumber,
-  totalChapters,
-  isComplete,
-  allComplete,
   nextReadingMin,
-  onReadProgress,
   isBookmarked,
   onToggleBookmark,
   highlights,
   onAddHighlight,
   onUpdateHighlight,
   onRemoveHighlight,
+  onHome,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState(0);
@@ -99,7 +92,7 @@ export function MarkdownViewer({
   const nextChunk = chunkIndex >= 0 && chunkIndex < allChunks.length - 1 ? allChunks[chunkIndex + 1] : null;
 
   const renderContent = useMemo(() => {
-    return activeChunk.content.replace(/^(#{1,2})\s+(.+?)\s*#*\s*\n?/, "");
+    return activeChunk.content.replace(/^\s*(#{1,6})\s+[^\n]+(\n|$)/, "");
   }, [activeChunk.content]);
 
   const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
@@ -236,18 +229,13 @@ export function MarkdownViewer({
   // by how far the reader has actually scrolled.
   useEffect(() => {
     const onScroll = () => {
-      const doc = document.documentElement;
       const scrolled = window.scrollY;
-      const max = doc.scrollHeight - window.innerHeight;
-      const frac = max > 0 ? scrolled / max : 1;
-      setProgress(frac * 100);
       setShowTop(scrolled > 400);
-      onReadProgress(frac);
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, [file.id, activeChunk.id, onReadProgress, editMode]);
+  }, [file.id, activeChunk.id, editMode]);
 
   // Save shortcut
   useEffect(() => {
@@ -484,10 +472,6 @@ export function MarkdownViewer({
         </div>
       )}
 
-      <div
-        className="fixed left-0 right-0 top-16 z-40 h-0.5 bg-primary/80 transition-transform origin-left"
-        style={{ transform: `scaleX(${progress / 100})` }}
-      />
 
       {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
@@ -499,25 +483,17 @@ export function MarkdownViewer({
           onMouseUp={openCreateMenu}
           className="docs-prose mx-auto min-w-0 flex-1"
         >
-          <div className="mb-8">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">
-                {stripExt(file.name)}
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-muted/50 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                <Clock className="h-3 w-3" /> ≈ {stats.readingMin} min read
-              </span>
-              {progress > 90 && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                  <Check className="h-3 w-3" strokeWidth={3} /> Read
-                </span>
-              )}
-            </div>
 
+          <div className="mb-8">
             <div className="flex items-start justify-between gap-4">
-              <h1 className="min-w-0 flex-1 text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words">
-                {activeChunk.title}
-              </h1>
+              <div className="min-w-0 flex-1">
+                <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words">
+                  {activeChunk.title}
+                </h1>
+                <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
+                </span>
+              </div>
               
               <div className="mt-1.5 flex shrink-0 items-center gap-2">
                 <button
@@ -590,91 +566,62 @@ export function MarkdownViewer({
 
           {/* Natural stopping point — quiet acknowledgement, clear next step */}
           {!editMode && (
-            <div className="mt-16 border-t border-border pt-8">
-              {isLastChunk && (
-                <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                    <Check className="h-3 w-3" strokeWidth={3} />
-                  </span>
-                  <span>
-                    <span className="font-medium text-foreground">{stripExt(file.name)}</span>{" "}
-                    Documentation complete
-                  </span>
-                </div>
-              )}
-
-              {nextChunk ? (
-                <button
-                  onClick={() => onNav(file.id, nextChunk.id)}
-                  className="group flex w-full items-center justify-between gap-4 rounded-xl border border-border p-5 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
-                >
-                  <span className="min-w-0">
-                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Next topic
-                    </span>
-                    <span className="mt-1 block truncate text-base font-semibold text-foreground">
-                      {nextChunk.title}
-                    </span>
-                  </span>
-                  <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                </button>
-              ) : nextFile ? (
-                <button
-                  onClick={() => onNav(nextFile.id, null)}
-                  className="group flex w-full items-center justify-between gap-4 rounded-xl border border-border p-5 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
-                >
-                  <span className="min-w-0">
-                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Next chapter
-                    </span>
-                    <span className="mt-1 block truncate text-base font-semibold text-foreground">
-                      {stripExt(nextFile.name)}
-                    </span>
-                    {nextReadingMin != null && (
-                      <span className="mt-0.5 block text-xs text-muted-foreground">
-                        ≈ {nextReadingMin} min read
+            <div className="mt-20 border-t border-border pt-10">
+              <div className="flex flex-col items-center gap-6">
+                <div className="w-full max-w-xl">
+                  {nextChunk ? (
+                    <button
+                      onClick={() => onNav(file.id, nextChunk.id)}
+                      className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
+                          Next
+                        </span>
+                        <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
+                          {nextChunk.title}
+                        </span>
                       </span>
-                    )}
-                  </span>
-                  <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                </button>
-              ) : allComplete ? (
-                <div className="rounded-xl border border-border bg-muted/30 p-8 text-center">
-                  <span className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                    <Check className="h-5 w-5" strokeWidth={3} />
-                  </span>
-                  <div className="text-base font-semibold text-foreground">
-                    Documentation completed
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    You&apos;ve finished all {totalChapters}{" "}
-                    {totalChapters === 1 ? "chapter" : "chapters"}.
-                  </p>
+                      <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                    </button>
+                  ) : nextFile ? (
+                    <button
+                      onClick={() => onNav(nextFile.id, null)}
+                      className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
+                          Next Chapter
+                        </span>
+                        <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
+                          {stripExt(nextFile.name)}
+                        </span>
+                        {nextReadingMin != null && (
+                          <span className="mt-1 block text-xs font-medium text-muted-foreground">
+                            ≈ {nextReadingMin} min read
+                          </span>
+                        )}
+                      </span>
+                      <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                    </button>
+                  ) : (
+                    <div className="flex items-center justify-center rounded-2xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                      You've reached the end.
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                  You&apos;ve reached the end of this chapter.
-                </div>
-              )}
 
-              <div className="mt-4 flex flex-col gap-2 items-start">
-                {prevChunk ? (
+                {(prevChunk || prevFile) && (
                   <button
-                    onClick={() => onNav(file.id, prevChunk.id)}
-                    className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => prevChunk ? onNav(file.id, prevChunk.id) : prevFile && onNav(prevFile.id, null)}
+                    className="group flex max-w-full items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
                   >
-                    <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-                    Previous topic: {prevChunk.title}
+                    <ArrowLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-1" />
+                    <span className="truncate">
+                      {prevChunk ? `Previous: ${prevChunk.title}` : `Previous Chapter: ${prevFile ? stripExt(prevFile.name) : ""}`}
+                    </span>
                   </button>
-                ) : prevFile ? (
-                  <button
-                    onClick={() => onNav(prevFile.id, null)}
-                    className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-                    Previous chapter: {stripExt(prevFile.name)}
-                  </button>
-                ) : null}
+                )}
               </div>
             </div>
           )}

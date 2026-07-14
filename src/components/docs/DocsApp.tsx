@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate, Navigate } from "@tanstack/react-router";
 import gsap from "gsap";
 import {
   BookOpen,
@@ -15,12 +15,14 @@ import {
   Undo2,
   Home,
 } from "lucide-react";
-import { DropZone } from "./DropZone";
+
 import { Sidebar } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { CommandPalette } from "./CommandPalette";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { HomePage } from "./HomePage";
+import { SettingsPage } from "./SettingsPage";
+import { MobileBottomNav } from "./MobileBottomNav";
 import type { MdFile, MdChunk } from "@/lib/markdown-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
 import { parseHeadings, readingMinutes, splitIntoSubtopics } from "@/lib/markdown-utils";
@@ -83,6 +85,7 @@ export function DocsApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const showHome = location.pathname === "/";
+  const showSettings = location.pathname === "/settings";
   const [userName, setUserName] = useState<string | null>(null);
   const firstVisitRef = useRef(false);
 
@@ -264,20 +267,21 @@ export function DocsApp() {
         const prefs = loadPrefs();
         setUserName(prefs.name);
         firstVisitRef.current = !prefs.name;
-        let list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
-        let ws: WorkspaceRecord;
+        const list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
         if (list.length === 0) {
-          ws = newWorkspaceRecord("My workspace");
-          await persistence.putWorkspace(ws);
-          list = [ws];
+          if (!alive) return;
+          setWorkspaces([]);
+          setWorkspaceId(null);
+          workspaceIdRef.current = null;
+          setSaveStatus("idle");
         } else {
-          ws = list.find((w) => w.id === prefs.lastWorkspaceId) ?? list[0];
+          const ws = list.find((w) => w.id === prefs.lastWorkspaceId) ?? list[0];
+          if (!alive) return;
+          list.sort((a, b) => a.createdAt - b.createdAt);
+          setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
+          hydrateWorkspace(ws);
+          savePrefs({ lastWorkspaceId: ws.id });
         }
-        if (!alive) return;
-        list.sort((a, b) => a.createdAt - b.createdAt);
-        setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
-        hydrateWorkspace(ws);
-        savePrefs({ lastWorkspaceId: ws.id });
       } finally {
         if (alive) {
           hydratedRef.current = true;
@@ -319,34 +323,102 @@ export function DocsApp() {
 
   const addFiles = useCallback(
     async (fileList: File[]) => {
-      const parsed: MdFile[] = await Promise.all(
-        fileList.map(async (f) => {
-          const content = await f.text();
-          const id = `${f.name}-${crypto.randomUUID().slice(0, 8)}`;
-          return { id, name: f.name, content, headings: parseHeadings(content, id), subtopics: splitIntoSubtopics(content, f.name) };
-        }),
-      );
-      setFiles((prev) => [...prev, ...parsed]);
-      setActiveFileId((cur) => {
-        if (cur) return cur;
-        const resumeName = pickResume(
-          parsed.map((f) => f.name),
-          progress,
+      const total = fileList.length;
+      if (total === 0) return;
+      
+      const toastId = toast.loading(`Uploading ${total} file${total > 1 ? "s" : ""}...`);
+      
+      try {
+        let loaded = 0;
+        const parsed: MdFile[] = await Promise.all(
+          fileList.map(async (f) => {
+            const content = await f.text();
+            loaded++;
+            toast.loading(`Uploading ${total} file${total > 1 ? "s" : ""}... ${Math.round((loaded / total) * 100)}%`, { id: toastId });
+            const id = `${f.name}-${crypto.randomUUID().slice(0, 8)}`;
+            return { id, name: f.name, content, headings: parseHeadings(content, id), subtopics: splitIntoSubtopics(content, f.name) };
+          }),
         );
+
+        const nextFiles = [...snapshotRef.current.files, ...parsed];
+        const resumeName = snapshotRef.current.activeFileId
+          ? null
+          : pickResume(parsed.map((f) => f.name), progress);
         const resume = resumeName ? parsed.find((f) => f.name === resumeName) : null;
-        return (resume ?? parsed[0])?.id ?? null;
-      });
-      navigate({ to: "/md-reader" }); // uploading takes you straight into reading
-      markDirty();
+        const nextActiveFileId = snapshotRef.current.activeFileId ?? (resume ?? parsed[0])?.id ?? null;
+
+        if (!workspaceIdRef.current) {
+          const id = crypto.randomUUID();
+          workspaceIdRef.current = id;
+          workspaceNameRef.current = "My workspace";
+          createdAtRef.current = Date.now();
+          setWorkspaceId(id);
+          setWorkspaces([{ id, name: workspaceNameRef.current }]);
+          savePrefs({ lastWorkspaceId: id });
+        }
+
+        // The home and reader are separate route components. Persist before
+        // navigating so the reader's new DocsApp instance can hydrate the upload.
+        snapshotRef.current = {
+          ...snapshotRef.current,
+          files: nextFiles,
+          activeFileId: nextActiveFileId,
+        };
+        setFiles(nextFiles);
+        setActiveFileId(nextActiveFileId);
+        setSaveStatus("saving");
+        await persistence.putWorkspace(buildRecord());
+        setSaveStatus("saved");
+
+        toast.success(`Successfully uploaded ${total} file${total > 1 ? "s" : ""}!`, { id: toastId });
+        navigate({ to: "/md-reader" }); // Uploading takes you straight into reading.
+      } catch {
+        setSaveStatus("idle");
+        toast.error("Could not upload the selected file(s). Please try again.", { id: toastId });
+      }
     },
-    [progress, markDirty, navigate],
+    [buildRecord, navigate, progress],
   );
 
-  const handleFileInput = (list: FileList | null) => {
+  const handleFileInput = useCallback((list: FileList | null) => {
     if (!list) return;
     const picked = Array.from(list).filter((f) => /\.(md|markdown|mdx|txt)$/i.test(f.name));
     if (picked.length) addFiles(picked);
-  };
+  }, [addFiles]);
+
+  const [globalDrag, setGlobalDrag] = useState(false);
+
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer?.types.includes("Files")) {
+        setGlobalDrag(true);
+      }
+    };
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.clientX === 0 && e.clientY === 0) {
+        setGlobalDrag(false);
+      }
+    };
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      setGlobalDrag(false);
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        handleFileInput(e.dataTransfer.files);
+      }
+    };
+
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("drop", handleDrop);
+
+    return () => {
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("drop", handleDrop);
+    };
+  }, [handleFileInput]);
 
   const activeFile = files.find((f) => f.id === activeFileId) ?? null;
   const activeIdx = activeFile ? files.findIndex((f) => f.id === activeFile.id) : -1;
@@ -364,6 +436,10 @@ export function DocsApp() {
        targetHeadingId = subs?.[0]?.id || "preamble";
     }
     setActiveHeadingId(targetHeadingId);
+    
+    if (location.pathname !== "/md-reader") {
+      navigate({ to: "/md-reader" });
+    }
     
     setDrawerOpen(false);
     markDirty();
@@ -414,10 +490,23 @@ export function DocsApp() {
 
   const addHighlight = useCallback(
     (hl: Omit<Highlight, "id" | "fileId">, fileId: string) => {
-      setHighlights((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), fileId, ...hl },
-      ]);
+      setHighlights((prev) => {
+        const overlaps = prev.filter(
+          (p) =>
+            p.fileId === fileId &&
+            p.subtopicId === hl.subtopicId &&
+            typeof p.start === "number" &&
+            typeof p.end === "number" &&
+            typeof hl.start === "number" &&
+            typeof hl.end === "number" &&
+            !(hl.end <= p.start || hl.start >= p.end)
+        );
+        const withoutOverlaps = prev.filter((p) => !overlaps.includes(p));
+        return [
+          ...withoutOverlaps,
+          { id: crypto.randomUUID(), fileId, ...hl },
+        ];
+      });
       markDirty();
     },
     [markDirty],
@@ -487,13 +576,36 @@ export function DocsApp() {
   }, [refreshWorkspaceList]);
 
   const openFromHome = useCallback(
-    (fileId: string, subtopicId?: string) => {
+    async (fileId: string, subtopicId?: string) => {
+      const file = files.find((item) => item.id === fileId);
+      if (!file) return;
+
+      const chunks = file.subtopics || splitIntoSubtopics(file.content, file.name);
+      const targetSubtopicId = subtopicId ?? chunks[0]?.id ?? "preamble";
+
+      // Home and reader are separate route instances. Save the selection before
+      // navigating so the reader hydrates the document the user chose, rather
+      // than the workspace's previously open document.
+      snapshotRef.current = {
+        ...snapshotRef.current,
+        activeFileId: fileId,
+      };
+      setActiveFileId(fileId);
+      setActiveHeadingId(targetSubtopicId);
+
+      if (workspaceIdRef.current) {
+        setSaveStatus("saving");
+        try {
+          await persistence.putWorkspace(buildRecord());
+          setSaveStatus("saved");
+        } catch {
+          setSaveStatus("idle");
+        }
+      }
+
       navigate({ to: "/md-reader" });
-      handleSelect(fileId, subtopicId);
     },
-    // handleSelect is stable enough for our needs; intentionally minimal deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [navigate],
+    [buildRecord, files, navigate],
   );
 
   const handleContentChange = useCallback(
@@ -524,18 +636,7 @@ export function DocsApp() {
   const cycleTheme = () =>
     setTheme((t) => (t === "dark" ? "light" : "dark"));
 
-  const totalChapters = files.length;
-  const completedCount = files.filter((f) => progress[f.name]?.completed).length;
-  const activeComplete = activeFile ? !!progress[activeFile.name]?.completed : false;
-  const allComplete = totalChapters > 0 && completedCount === totalChapters;
   const nextReadingMin = nextFile ? readingMinutes(nextFile.content) : null;
-
-  const handleReadProgress = useCallback(
-    (pct: number) => {
-      if (activeFile) recordScroll(activeFile.name, pct);
-    },
-    [activeFile, recordScroll],
-  );
 
   // ---- workspace management ----
 
@@ -551,9 +652,9 @@ export function DocsApp() {
     [persistNow, hydrateWorkspace],
   );
 
-  const newWorkspace = useCallback(async () => {
+  const newWorkspace = useCallback(async (name?: string) => {
     await persistNow(true);
-    const ws = newWorkspaceRecord(`Workspace ${workspaces.length + 1}`);
+    const ws = newWorkspaceRecord(name || `Workspace ${workspaces.length + 1}`);
     await persistence.putWorkspace(ws);
     await refreshWorkspaceList();
     hydrateWorkspace(ws);
@@ -622,39 +723,36 @@ export function DocsApp() {
   );
 
   const clearAllStorage = useCallback(async () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    if (restoredFlash.current) clearTimeout(restoredFlash.current);
+
+    // Stop lifecycle handlers from writing the current snapshot back while the
+    // database is being deleted and the page is reloading.
+    hydratedRef.current = false;
+    workspaceIdRef.current = null;
+
     try {
-      const list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
-      await Promise.all(list.map((w) => persistence.deleteWorkspace(w.id)));
       try {
         localStorage.clear();
+        sessionStorage.clear();
       } catch {
-        /* ignore */
+        // Continue with IndexedDB deletion when Web Storage is unavailable.
       }
-    } finally {
+      await persistence.destroy();
       window.location.reload();
+    } catch (error) {
+      console.error("Could not clear all browser storage", error);
+      alert("Some data could not be cleared. Close DocuCraft in other tabs and try again.");
     }
   }, []);
 
   // ---- home page data ----
-  const recentItems = files
-    .map((f) => ({ f, at: progress[f.name]?.lastReadAt ?? 0 }))
-    .filter((x) => x.at > 0)
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 6)
-    .map(({ f }) => ({
-      id: f.id,
-      name: f.name,
-      minutes: readingMinutes(f.content),
-      progress: progress[f.name]?.scrollPct ?? 0,
-      completed: !!progress[f.name]?.completed,
-    }));
-
-  const resumeName = pickResume(
-    files.map((f) => f.name),
-    progress,
-  );
-  const resumeFile = resumeName ? (files.find((f) => f.name === resumeName) ?? null) : null;
-  const resume = resumeFile ? { id: resumeFile.id, name: resumeFile.name } : null;
+  const workspaceFileItems = files.map((file) => ({
+    id: file.id,
+    name: file.name,
+    minutes: readingMinutes(file.content),
+  }));
 
   const workspaceItems = workspaces.map((w) => ({
     id: w.id,
@@ -675,6 +773,7 @@ export function DocsApp() {
     .filter(Boolean) as { fileId: string; subtopicId: string; name: string }[];
 
   const goHome = useCallback(() => navigate({ to: "/" }), [navigate]);
+  const openSettings = useCallback(() => navigate({ to: "/settings" }), [navigate]);
 
   const openWorkspaceFromHome = useCallback(
     async (id: string) => {
@@ -683,6 +782,11 @@ export function DocsApp() {
     },
     [switchWorkspace, navigate],
   );
+
+  const createWorkspaceFromDock = useCallback(async () => {
+    await newWorkspace();
+    navigate({ to: "/md-reader" });
+  }, [navigate, newWorkspace]);
 
   const workspaceMenu = (
     <WorkspaceMenu
@@ -697,6 +801,24 @@ export function DocsApp() {
     />
   );
 
+  useEffect(() => {
+    if (!showHome && !showSettings && files.length === 0 && !booting) {
+      navigate({ to: "/", replace: true });
+    }
+  }, [showHome, showSettings, files.length, booting, navigate]);
+
+  const dragOverlay = globalDrag ? (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm border-4 border-dashed border-primary transition-all duration-300">
+      <div className="rounded-3xl bg-card p-10 shadow-2xl flex flex-col items-center gap-6 animate-in fade-in zoom-in duration-300">
+        <Upload className="h-16 w-16 text-primary animate-bounce" />
+        <div className="text-center">
+          <h2 className="text-3xl font-bold text-foreground">Drop files to upload</h2>
+          <p className="mt-2 text-base text-muted-foreground">Your Markdown files will be instantly imported.</p>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (booting) {
     return <div className="min-h-dvh bg-background" />;
   }
@@ -709,6 +831,7 @@ export function DocsApp() {
           onCycleTheme={cycleTheme}
           onMenu={null}
           hideMenu
+          hideUpload
           onOpenPalette={() => setPaletteOpen(true)}
           hasFiles={files.length > 0}
           onAddFiles={() => inputRef.current?.click()}
@@ -725,11 +848,28 @@ export function DocsApp() {
         <HomePage
           userName={userName}
           onSubmitName={submitName}
-          recent={recentItems}
-          bookmarks={bookmarkItems}
-          hasFiles={files.length > 0}
+          files={workspaceFileItems}
+          workspaces={workspaceItems}
           onOpenFile={openFromHome}
+          onOpenWorkspace={openWorkspaceFromHome}
           onUpload={() => inputRef.current?.click()}
+          onFilesDrop={handleFileInput}
+        />
+        <div className="pb-24 pt-8 text-center text-xs text-muted-foreground lg:pb-8 md:landscape:pb-8">
+          Built with ❤️ by Janardhan
+        </div>
+        <MobileBottomNav
+          workspaces={workspaces}
+          currentWorkspaceId={workspaceId}
+          bookmarks={bookmarkItems}
+          settingsOpen={showSettings}
+          onHome={goHome}
+          onOpenSettings={openSettings}
+          onUpload={() => inputRef.current?.click()}
+          onOpenBookmark={openFromHome}
+          onOpenWorkspace={openWorkspaceFromHome}
+          onNewWorkspace={createWorkspaceFromDock}
+          isHome={true}
         />
         <input
           ref={inputRef}
@@ -737,30 +877,19 @@ export function DocsApp() {
           multiple
           accept=".md,.markdown,.mdx,.txt,text/markdown"
           className="hidden"
-          onChange={(e) => handleFileInput(e.target.files)}
+          onChange={(e) => {
+            handleFileInput(e.target.files);
+            e.target.value = "";
+          }}
         />
+        {dragOverlay}
       </div>
     );
   }
 
-  if (files.length === 0) {
-    return (
-      <div className="min-h-dvh bg-background">
-        <Header
-          theme={theme}
-          onCycleTheme={cycleTheme}
-          onMenu={null}
-          hideMenu
-          onOpenPalette={() => setPaletteOpen(true)}
-          hasFiles={false}
-          onAddFiles={() => inputRef.current?.click()}
-          saveStatus={saveStatus}
-          workspaceMenu={workspaceMenu}
-          onHome={goHome}
-        />
-        <DropZone onFiles={addFiles} fullscreen />
-      </div>
-    );
+
+  if (files.length === 0 && !showSettings) {
+    return <div className="min-h-dvh bg-background" />;
   }
 
   return (
@@ -789,7 +918,7 @@ export function DocsApp() {
       <div className="flex">
         <div
           ref={sidebarWrapRef}
-          className="sticky top-16 hidden h-[calc(100dvh-4rem)] shrink-0 overflow-hidden border-r border-border md:block"
+          className="sticky top-16 hidden h-[calc(100dvh-4rem)] shrink-0 overflow-hidden border-r border-border md:block md:portrait:hidden"
         >
           <div ref={sidebarInnerRef} className="h-full" style={{ width: sidebarWidth }}>
             <Sidebar
@@ -803,14 +932,15 @@ export function DocsApp() {
               onAddFiles={() => inputRef.current?.click()}
               onRemoveFile={removeFile}
               onRenameFile={renameFile}
-              theme={theme}
-              onCycleTheme={cycleTheme}
               bookmarks={bookmarkItems}
-              currentWorkspaceName={workspaces.find((w) => w.id === workspaceId)?.name ?? ""}
+              currentWorkspaceName={workspaceNameRef.current}
               canDeleteWorkspace={workspaces.length > 1}
-              onRenameCurrentWorkspace={(name) => workspaceId && renameWorkspace(workspaceId, name)}
-              onDeleteCurrentWorkspace={() => workspaceId && deleteWorkspace(workspaceId)}
+              onRenameCurrentWorkspace={renameWorkspace}
+              onDeleteCurrentWorkspace={deleteWorkspace}
               onClearStorage={clearAllStorage}
+              highlights={highlights}
+              onRemoveBookmark={toggleBookmark}
+              onRemoveHighlight={removeHighlight}
             />
           </div>
           {!sidebarCollapsed && (
@@ -863,22 +993,42 @@ export function DocsApp() {
                   onAddFiles={() => inputRef.current?.click()}
                   onRemoveFile={removeFile}
                   onRenameFile={renameFile}
-                  theme={theme}
-                  onCycleTheme={cycleTheme}
                   bookmarks={bookmarkItems}
-                  currentWorkspaceName={workspaces.find((w) => w.id === workspaceId)?.name ?? ""}
+                  currentWorkspaceName={workspaceNameRef.current}
                   canDeleteWorkspace={workspaces.length > 1}
-                  onRenameCurrentWorkspace={(name) => workspaceId && renameWorkspace(workspaceId, name)}
-                  onDeleteCurrentWorkspace={() => workspaceId && deleteWorkspace(workspaceId)}
+                  onRenameCurrentWorkspace={renameWorkspace}
+                  onDeleteCurrentWorkspace={deleteWorkspace}
                   onClearStorage={clearAllStorage}
+                  highlights={highlights}
+                  onRemoveBookmark={toggleBookmark}
+                  onRemoveHighlight={removeHighlight}
                 />
               </div>
             </div>
           </div>
         )}
 
-        <main className="min-w-0 flex-1">
-          {activeFile && (
+        <main className="min-w-0 flex-1 pb-24 lg:pb-0 md:landscape:pb-0">
+          {showSettings ? (
+            <SettingsPage
+              theme={theme}
+              onThemeChange={setTheme}
+              workspaces={workspaces}
+              currentWorkspaceId={workspaceId}
+              onRenameWorkspace={renameWorkspace}
+              onDeleteWorkspace={deleteWorkspace}
+              onClearStorage={clearAllStorage}
+              bookmarks={bookmarkItems}
+              onRemoveBookmark={toggleBookmark}
+              onClearBookmarks={() => { setBookmarks([]); markDirty(); }}
+              highlights={highlights}
+              onRemoveHighlight={removeHighlight}
+              onClearHighlights={() => { setHighlights([]); markDirty(); }}
+              onNavigate={openFromHome}
+              files={files}
+              onOpenWorkspace={openWorkspaceFromHome}
+            />
+          ) : activeFile && (
             <MarkdownViewer
               file={activeFile}
               prevFile={prevFile}
@@ -887,22 +1037,31 @@ export function DocsApp() {
               activeSubtopicId={activeHeadingId}
               highlightQuery={highlightQuery}
               onContentChange={handleContentChange}
-              chapterNumber={activeIdx + 1}
-              totalChapters={totalChapters}
-              isComplete={activeComplete}
-              allComplete={allComplete}
               nextReadingMin={nextReadingMin}
-              onReadProgress={handleReadProgress}
               isBookmarked={!!activeFile && !!activeHeadingId && bookmarks.includes(`${activeFile.id}#${activeHeadingId}`)}
               onToggleBookmark={() => activeFile && activeHeadingId && toggleBookmark(activeFile.id, activeHeadingId)}
               highlights={highlights.filter((h) => h.fileId === activeFile.id)}
               onAddHighlight={(hl) => addHighlight(hl, activeFile.id)}
               onUpdateHighlight={updateHighlight}
               onRemoveHighlight={removeHighlight}
+              onHome={goHome}
             />
           )}
         </main>
       </div>
+
+      <MobileBottomNav
+        workspaces={workspaces}
+        currentWorkspaceId={workspaceId}
+        bookmarks={bookmarkItems}
+        settingsOpen={showSettings}
+        onHome={goHome}
+        onOpenSettings={openSettings}
+        onUpload={() => inputRef.current?.click()}
+        onOpenBookmark={openFromHome}
+        onOpenWorkspace={openWorkspaceFromHome}
+        onNewWorkspace={createWorkspaceFromDock}
+      />
 
       <input
         ref={inputRef}
@@ -910,8 +1069,12 @@ export function DocsApp() {
         multiple
         accept=".md,.markdown,.mdx,.txt,text/markdown"
         className="hidden"
-        onChange={(e) => handleFileInput(e.target.files)}
+        onChange={(e) => {
+          handleFileInput(e.target.files);
+          e.target.value = "";
+        }}
       />
+      {dragOverlay}
     </div>
   );
 }
@@ -921,6 +1084,7 @@ function Header({
   onCycleTheme,
   onMenu,
   hideMenu,
+  hideUpload,
   onOpenPalette,
   hasFiles,
   onAddFiles,
@@ -934,6 +1098,7 @@ function Header({
   onCycleTheme: () => void;
   onMenu: (() => void) | null;
   hideMenu?: boolean;
+  hideUpload?: boolean;
   onOpenPalette: () => void;
   hasFiles: boolean;
   onAddFiles: () => void;
@@ -948,7 +1113,7 @@ function Header({
       {!hideMenu && (
         <button
           onClick={() => onMenu?.()}
-          className="rounded-md p-2 transition-transform hover:bg-accent active:scale-90 md:hidden"
+          className="rounded-md p-2 transition-transform hover:bg-accent active:scale-90 lg:hidden md:landscape:hidden"
           aria-label="Menu"
         >
           <Menu className="h-4 w-4" />
@@ -957,26 +1122,23 @@ function Header({
       {onToggleSidebar && (
         <button
           onClick={onToggleSidebar}
-          className="hidden rounded-md p-2 text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-90 md:inline-flex"
+          className="hidden rounded-md p-2 text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-90 md:inline-flex md:portrait:hidden"
           aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {sidebarCollapsed ? (
-            <PanelLeftOpen className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
-          )}
+          <Menu className="h-4 w-4" />
         </button>
       )}
-      <div
+      <button
+        onClick={onHome}
         className="flex items-center gap-2 rounded-md px-1 py-1 text-muted-foreground transition-colors hover:text-foreground"
         aria-label="Home"
         title="Home"
       >
-        <span className="hidden text-sm font-semibold tracking-tight text-foreground sm:inline">
+        <span className="text-sm font-semibold tracking-tight text-foreground">
           Markdown Docs
         </span>
-      </div>
+      </button>
 
       {hasFiles && (
         <div className="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 lg:flex">
@@ -999,7 +1161,6 @@ function Header({
       )}
 
       <div className="ml-auto flex items-center gap-2">
-        {workspaceMenu}
         {hasFiles && (
           <>
             <button
@@ -1009,17 +1170,22 @@ function Header({
             >
               <Search className="h-4 w-4" />
             </button>
-            <button
-              onClick={onAddFiles}
-              className="flex h-8 w-8 items-center justify-center gap-1.5 rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:w-auto sm:px-3"
-              aria-label="Add files"
-              title="Add files"
-            >
-              <Plus className="h-4 w-4" />
-              <span className="hidden text-sm font-medium sm:inline">Upload</span>
-            </button>
+            {!hideUpload && (
+              <div className="hidden md:landscape:block lg:block">
+                <button
+                  onClick={onAddFiles}
+                  className="flex h-8 w-8 items-center justify-center gap-1.5 rounded-md bg-primary text-primary-foreground shadow transition-colors hover:bg-primary/90 sm:w-auto sm:px-3"
+                  aria-label="Add files"
+                  title="Add files"
+                >
+                  <Plus className="h-4 w-4 shrink-0" />
+                  <span className="hidden text-sm font-medium sm:inline">Upload</span>
+                </button>
+              </div>
+            )}
           </>
         )}
+        <div className="hidden md:landscape:block lg:block">{workspaceMenu}</div>
       </div>
     </header>
   );
