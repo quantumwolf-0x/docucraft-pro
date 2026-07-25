@@ -86,7 +86,8 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
             fileName: file.name,
             headingId: currentHeading?.id,
             headingText: currentHeading?.text,
-            snippet: (start > 0 ? "…" : "") + line.slice(start, end) + (end < line.length ? "…" : ""),
+            snippet:
+              (start > 0 ? "…" : "") + line.slice(start, end) + (end < line.length ? "…" : ""),
             score: 50,
           });
         }
@@ -159,7 +160,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center px-4 pt-[10vh]">
+    <div className="fixed inset-0 z-(--z-overlay) flex items-start justify-center px-4 pt-[10vh]">
       <div
         className="absolute inset-0 bg-foreground/30 backdrop-blur-sm"
         onClick={() => onOpenChange(false)}
@@ -178,7 +179,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
             className="flex-1 bg-transparent py-4 text-sm outline-none placeholder:text-muted-foreground"
             autoFocus
           />
-          <kbd className="hidden rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground sm:inline-block">
+          <kbd className="hidden rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-mono text-muted-foreground sm:inline-block">
             ESC
           </kbd>
         </div>
@@ -219,7 +220,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
             <Command.Group
               key={fileName}
               heading={fileName}
-              className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-3 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
+              className="**:[[cmdk-group-heading]]:px-2 **:[[cmdk-group-heading]]:pb-1 **:[[cmdk-group-heading]]:pt-3 **:[[cmdk-group-heading]]:text-xs **:[[cmdk-group-heading]]:font-semibold **:[[cmdk-group-heading]]:uppercase **:[[cmdk-group-heading]]:tracking-wider **:[[cmdk-group-heading]]:text-muted-foreground"
             >
               {hits.map((h, i) => (
                 <Command.Item
@@ -235,9 +236,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
                   )}
                   <div className="min-w-0 flex-1">
                     {h.headingText && (
-                      <div className="truncate text-[13px] font-medium">
-                        {highlight(h.headingText)}
-                      </div>
+                      <div className="truncate text-sm font-medium">{highlight(h.headingText)}</div>
                     )}
                     <div
                       className={`truncate text-xs ${h.headingText ? "text-muted-foreground" : "font-medium"}`}
@@ -250,7 +249,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
             </Command.Group>
           ))}
         </Command.List>
-        <div className="flex items-center justify-between border-t border-border bg-muted/40 px-4 py-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-3">
             <span>
               <kbd className="rounded border border-border bg-background px-1">↑↓</kbd> navigate

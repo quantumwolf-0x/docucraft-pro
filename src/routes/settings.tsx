@@ -3,9 +3,7 @@ import { DocsApp } from "@/components/docs/DocsApp";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
-    meta: [
-      { title: "Settings" },
-    ],
+    meta: [{ title: "Settings" }],
   }),
   component: DocsApp,
 });

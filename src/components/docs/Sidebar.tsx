@@ -5,8 +5,8 @@ import {
   MoreVertical,
   Trash2,
   Pencil,
-  ArrowUp,
-  ArrowDown,
+  GripVertical,
+  Check,
   Plus,
   Highlighter,
   Sparkles,
@@ -22,6 +22,9 @@ import {
   Presentation,
   Globe,
   File as FileIcon,
+  FolderOpen,
+  Archive,
+  Download,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { splitIntoSubtopics } from "@/lib/markdown-utils";
@@ -59,7 +62,7 @@ function kindIcon(kind: DocumentKind): LucideIcon {
  * - `mode` is driven by the chip row: All (flat), Recent (most-recently
  *   opened), Grouped (by file type), or Saved (bookmarks only).
  * - `sort`/`dir` are set from the three-dots menu. `manual` keeps the real
- *   file order so drag/Move Up-Down reordering stays meaningful.
+ *   file order so drag reordering stays meaningful.
  */
 export type SidebarView = {
   sort: "manual" | "name" | "date";
@@ -112,6 +115,8 @@ interface Props {
   currentWorkspaceId?: string | null;
   onSwitchWorkspace?: (id: string) => void;
   onDeleteWorkspace?: (id: string) => void;
+  onArchiveFile?: (id: string) => void;
+  onDownloadFile?: (id: string) => void;
   /**
    * Docked = the desktop/landscape full-height rail with no app header. It grows
    * a workspace picker, a search field, and a continue-reading card at the top.
@@ -157,6 +162,8 @@ export function Sidebar({
   currentWorkspaceId,
   onSwitchWorkspace,
   onDeleteWorkspace,
+  onArchiveFile,
+  onDownloadFile,
   docked = false,
   onOpenPalette,
   onToggleSidebar,
@@ -170,12 +177,21 @@ export function Sidebar({
     activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeHeadingId]);
 
+  // Reorder mode: toggled from any file's three-dots menu. While on, rows in the
+  // flat list become draggable and dropping calls onReorderFile. dragIndex is the
+  // row being dragged; overIndex is the row currently hovered as a drop target.
+  const [reordering, setReordering] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
   const total = files.length;
 
   // Recent: files in most-recently-opened order (persisted in IndexedDB as
   // ui.recentFileIds), filtered to those still present in the workspace.
+  const activeFiles = files.filter((f) => !f.isArchived);
+
   const recentFiles = recentFileIds
-    .map((id) => files.find((f) => f.id === id))
+    .map((id) => activeFiles.find((f) => f.id === id))
     .filter((f): f is MdFile => !!f);
 
   // Apply the sidebar view (sort → group). Manual reorder is only meaningful
@@ -183,10 +199,47 @@ export function Sidebar({
   // is chosen or the list is grouped.
   const kindOf = (f: MdFile) => f.kind ?? getDocumentKind(f.name, f.mimeType);
   const viewActive = view.sort !== "manual" || view.mode !== "all";
+
+  // Drag reorder is only meaningful against the real file order in a flat list,
+  // so enabling it forces the view back to manual/All. Disabled entirely when
+  // there is nothing to reorder or the parent gave us no reorder handler.
+  const canReorder = !!onReorderFile && total > 1;
+  const toggleReorder = () => {
+    setReordering((on) => {
+      const next = !on;
+      if (next && viewActive) onView?.(DEFAULT_VIEW);
+      if (!next) {
+        setDragIndex(null);
+        setOverIndex(null);
+      }
+      return next;
+    });
+  };
+
+  // If the view leaves the flat manual list while reordering, leave reorder mode
+  // so we never drag against a sorted/grouped list that ignores the drop index.
+  useEffect(() => {
+    if (reordering && viewActive) {
+      setReordering(false);
+      setDragIndex(null);
+      setOverIndex(null);
+    }
+  }, [reordering, viewActive]);
+
+  const endDrag = () => {
+    setDragIndex(null);
+    setOverIndex(null);
+  };
+  const dropOn = (targetIndex: number) => {
+    if (dragIndex !== null && dragIndex !== targetIndex) {
+      onReorderFile?.(dragIndex, targetIndex);
+    }
+    endDrag();
+  };
   const sorted =
     view.sort === "manual"
-      ? files
-      : [...files].sort((a, b) => {
+      ? activeFiles
+      : [...activeFiles].sort((a, b) => {
           const base =
             view.sort === "name"
               ? a.name.localeCompare(b.name)
@@ -208,8 +261,6 @@ export function Sidebar({
         ).map(([label, items]) => ({ label, items }))
       : [{ label: "", items: sorted }];
 
-
-
   const renderFileRow = (file: MdFile) => {
     const realIndex = files.indexOf(file);
     const current = file.id === activeFileId;
@@ -221,14 +272,48 @@ export function Sidebar({
       /\.(md|markdown|mdx|txt|docx|pdf|xlsx|xls|csv|json|ppt|pptx|gdoc|gslides)$/i,
       "",
     );
+    const dragActive = reordering && !viewActive && realIndex >= 0;
+    const isDragging = dragActive && dragIndex === realIndex;
+    const isDropTarget = dragActive && overIndex === realIndex && dragIndex !== realIndex;
     return (
       <div key={file.id} className="mb-1.5">
         <div
+          draggable={dragActive}
+          onDragStart={
+            dragActive
+              ? (e) => {
+                  setDragIndex(realIndex);
+                  e.dataTransfer.effectAllowed = "move";
+                }
+              : undefined
+          }
+          onDragOver={
+            dragActive
+              ? (e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  setOverIndex(realIndex);
+                }
+              : undefined
+          }
+          onDrop={
+            dragActive
+              ? (e) => {
+                  e.preventDefault();
+                  dropOn(realIndex);
+                }
+              : undefined
+          }
+          onDragEnd={dragActive ? endDrag : undefined}
           className={`group flex items-center gap-1 rounded-lg px-1 transition-colors ${
             current ? "bg-accent/60" : ""
-          }`}
+          } ${dragActive ? "cursor-grab active:cursor-grabbing" : ""} ${
+            isDragging ? "opacity-40" : ""
+          } ${isDropTarget ? "ring-2 ring-primary/60" : ""}`}
         >
-
+          {dragActive && (
+            <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
+          )}
           <button
             onClick={() => onSelect(file.id)}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
@@ -241,13 +326,13 @@ export function Sidebar({
               aria-hidden
             />
             <span
-              className={`min-w-0 flex-1 truncate text-[13px] ${
+              className={`min-w-0 flex-1 truncate text-sm ${
                 current ? "font-semibold text-foreground" : "font-medium text-foreground/80"
               }`}
             >
               {title}
             </span>
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
               {kind === "markdown" || kind === "text" ? `${mins}m` : null}
             </span>
           </button>
@@ -259,21 +344,15 @@ export function Sidebar({
               }
             }}
             onDelete={() => onRemoveFile(file.id)}
+            onArchive={onArchiveFile ? () => onArchiveFile(file.id) : undefined}
+            onDownload={onDownloadFile ? () => onDownloadFile(file.id) : undefined}
             onShowHighlights={
               onShowHighlights && (kind === "markdown" || kind === "text")
                 ? () => onShowHighlights(file.id)
                 : undefined
             }
-            onMoveUp={
-              !viewActive && realIndex > 0 && onReorderFile
-                ? () => onReorderFile(realIndex, realIndex - 1)
-                : undefined
-            }
-            onMoveDown={
-              !viewActive && realIndex < files.length - 1 && onReorderFile
-                ? () => onReorderFile(realIndex, realIndex + 1)
-                : undefined
-            }
+            reordering={reordering}
+            onToggleReorder={canReorder ? toggleReorder : undefined}
           />
         </div>
       </div>
@@ -286,7 +365,7 @@ export function Sidebar({
         <>
           {/* Workspace picker replaces the removed app header: Localdox logo,
               workspace name, and doc count, opening the workspace menu. */}
-          {onSwitchWorkspace && (
+          {(onSwitchWorkspace || onOpenPalette) && (
             <div className="flex items-center gap-1 px-3 pt-3">
               {onToggleSidebar && (
                 <button
@@ -298,39 +377,30 @@ export function Sidebar({
                   <PanelLeft className="h-4 w-4" />
                 </button>
               )}
-              <WorkspaceMenu
-                variant="sidebar"
-                docCount={total}
-                workspaces={workspaces}
-                currentId={currentWorkspaceId ?? null}
-                onSwitch={onSwitchWorkspace}
-                onNew={(name) => onNewWorkspace?.(name)}
-                onDelete={(id) => onDeleteWorkspace?.(id)}
-                onImport={(file) => onImportWorkspace?.(file)}
-                onExport={() => onExportWorkspace?.()}
-                onShare={() => onShareWorkspace?.()}
-              />
-            </div>
-          )}
-
-          {/* Search trigger — opens the command palette (docs + Ask AI). */}
-          {onOpenPalette && (
-            <div className="px-3 pt-3">
-              <button
-                onClick={onOpenPalette}
-                className="flex w-full items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-              >
-                <Search className="h-4 w-4 shrink-0" />
-                <span className="flex-1 truncate text-left text-xs">Search docs or ask AI...</span>
-                <span className="flex shrink-0 items-center gap-1">
-                  <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
-                    ⌘
-                  </kbd>
-                  <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
-                    K
-                  </kbd>
-                </span>
-              </button>
+              {onSwitchWorkspace && (
+                <WorkspaceMenu
+                  variant="sidebar"
+                  docCount={total}
+                  workspaces={workspaces}
+                  currentId={currentWorkspaceId ?? null}
+                  onSwitch={onSwitchWorkspace}
+                  onNew={(name) => onNewWorkspace?.(name)}
+                  onDelete={(id) => onDeleteWorkspace?.(id)}
+                  onImport={(file) => onImportWorkspace?.(file)}
+                  onExport={() => onExportWorkspace?.()}
+                  onShare={() => onShareWorkspace?.()}
+                />
+              )}
+              {onOpenPalette && (
+                <button
+                  onClick={onOpenPalette}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  aria-label="Search docs or ask AI..."
+                  title="Search (⌘K)"
+                >
+                  <Search className="h-4 w-4" />
+                </button>
+              )}
             </div>
           )}
         </>
@@ -356,15 +426,27 @@ export function Sidebar({
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3">
+        {reordering && !viewActive && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-2 text-xs text-primary">
+            <GripVertical className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex-1">Drag files to reorder</span>
+            <button
+              onClick={toggleReorder}
+              className="shrink-0 rounded px-2 py-0.5 text-xs font-semibold hover:bg-primary/15"
+            >
+              Done
+            </button>
+          </div>
+        )}
         {view.mode === "recent" ? (
           recentFiles.length === 0 ? (
-            <p className="px-2 py-4 text-[13px] text-muted-foreground">No recently opened files.</p>
+            <p className="px-2 py-4 text-sm text-muted-foreground">No recently opened files.</p>
           ) : (
             recentFiles.map(renderFileRow)
           )
         ) : view.mode === "saved" ? (
           bookmarks.length === 0 ? (
-            <p className="px-2 py-4 text-[13px] text-muted-foreground">No saved items yet.</p>
+            <p className="px-2 py-4 text-sm text-muted-foreground">No saved items yet.</p>
           ) : (
             <ul className="space-y-1.5">
               {bookmarks.map((bm) => (
@@ -374,7 +456,7 @@ export function Sidebar({
                 >
                   <button
                     onClick={() => onSelect(bm.fileId, bm.subtopicId)}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left text-[13px] font-medium text-foreground/80"
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left text-sm font-medium text-foreground/80"
                   >
                     <span className="min-w-0 flex-1 truncate">{bm.name}</span>
                   </button>
@@ -393,7 +475,7 @@ export function Sidebar({
           groups.map((groupItem) => (
             <div key={groupItem.label || "__all"} className={groupItem.label ? "mb-3" : ""}>
               {groupItem.label && (
-                <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   {groupItem.label}
                 </div>
               )}
@@ -413,7 +495,7 @@ export function Sidebar({
         </button>
         <button
           onClick={onOpenSettings}
-          className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           aria-label="Settings"
           title="Settings"
         >
@@ -427,15 +509,19 @@ export function Sidebar({
 function FileMenu({
   onRename,
   onDelete,
+  onArchive,
+  onDownload,
   onShowHighlights,
-  onMoveUp,
-  onMoveDown,
+  reordering,
+  onToggleReorder,
 }: {
   onRename: () => void;
   onDelete: () => void;
+  onArchive?: () => void;
+  onDownload?: () => void;
   onShowHighlights?: () => void;
-  onMoveUp?: () => void;
-  onMoveDown?: () => void;
+  reordering?: boolean;
+  onToggleReorder?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -467,34 +553,21 @@ function FileMenu({
         <MoreVertical className="h-4 w-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-44 rounded-md border border-border bg-popover p-1 shadow-md">
-          {onMoveUp && (
+        <div className="absolute right-0 top-full z-(--z-dropdown) mt-1 w-44 rounded-md border border-border bg-popover p-1 shadow-md">
+          {onToggleReorder && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);
-                onMoveUp();
+                onToggleReorder();
               }}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
             >
-              <ArrowUp className="h-3.5 w-3.5" />
-              Move Up
+              {reordering ? <Check className="h-3 w-3" /> : <GripVertical className="h-3 w-3" />}
+              {reordering ? "Done reordering" : "Reorder"}
             </button>
           )}
-          {onMoveDown && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                onMoveDown();
-              }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-              Move Down
-            </button>
-          )}
-          {(onMoveUp || onMoveDown) && <div className="my-1 h-px bg-border" />}
+          {onToggleReorder && <div className="my-1 h-px bg-border" />}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -503,9 +576,22 @@ function FileMenu({
             }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
           >
-            <Pencil className="h-3.5 w-3.5" />
+            <Pencil className="h-3 w-3" />
             Rename
           </button>
+          {onDownload && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onDownload();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+            >
+              <Download className="h-3 w-3" />
+              Download
+            </button>
+          )}
           {onShowHighlights && (
             <button
               onClick={(e) => {
@@ -515,8 +601,21 @@ function FileMenu({
               }}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
             >
-              <Highlighter className="h-3.5 w-3.5" />
+              <Highlighter className="h-3 w-3" />
               See Highlights
+            </button>
+          )}
+          {onArchive && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onArchive();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+            >
+              <Archive className="h-3 w-3" />
+              Archive
             </button>
           )}
           <button
@@ -527,7 +626,7 @@ function FileMenu({
             }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive hover:bg-accent/50"
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <Trash2 className="h-3 w-3" />
             Delete
           </button>
         </div>
@@ -556,7 +655,7 @@ function SidebarChips({
   ] as const;
 
   return (
-    <div className="flex w-full min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex w-full min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none [&::-webkit-scrollbar]:hidden">
       {chips.map(([key, label]) => (
         <button
           key={key}

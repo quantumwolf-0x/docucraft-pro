@@ -1,5 +1,16 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronDown, PlusCircle, Download, Upload, Trash2, Check, FolderOpen, Users, Layers } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  ChevronDown,
+  PlusCircle,
+  Download,
+  Upload,
+  Trash2,
+  Check,
+  FolderOpen,
+  Users,
+  Layers,
+} from "lucide-react";
 
 interface WorkspaceLite {
   id: string;
@@ -38,12 +49,42 @@ export function WorkspaceMenu({
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const sidebar = variant === "sidebar";
+
+  // The menu is portaled to <body> so it escapes every header/content stacking
+  // context and can never be painted under a document panel. Because it lives
+  // outside the normal flow, we position it manually from the trigger's rect
+  // and keep it pinned as the page scrolls or resizes.
+  const MENU_W = 280;
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const el = rootRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const desired = sidebar ? r.left : r.right - MENU_W; // sidebar left-aligns, pill right-aligns
+      const left = Math.min(Math.max(8, desired), window.innerWidth - MENU_W - 8);
+      setPos({ top: r.bottom + 6, left });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open, sidebar]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", onDown);
@@ -73,10 +114,8 @@ export function WorkspaceMenu({
     setOpen(false);
   };
 
-  const sidebar = variant === "sidebar";
-
   return (
-    <div ref={rootRef} className={`relative ${sidebar ? "min-w-0 flex-1 z-50" : ""}`}>
+    <div ref={rootRef} className={`relative ${sidebar ? "min-w-0 flex-1 z-(--z-dropdown)" : ""}`}>
       {sidebar ? (
         <button
           onClick={() => setOpen((o) => !o)}
@@ -85,9 +124,7 @@ export function WorkspaceMenu({
         >
           <span className="min-w-0">
             <span className="flex min-w-0 items-center gap-1">
-              <span className="truncate text-sm font-semibold text-foreground">
-                {current?.name ?? "Workspace"}
-              </span>
+              <span className="truncate text-sm font-semibold text-foreground">Localdox</span>
               <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground opacity-70" />
             </span>
           </span>
@@ -95,7 +132,7 @@ export function WorkspaceMenu({
       ) : (
         <button
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex h-8 max-w-[180px] items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex h-8 max-w-xs items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           title="Workspaces"
         >
           <FolderOpen className="h-4 w-4 shrink-0" />
@@ -104,37 +141,40 @@ export function WorkspaceMenu({
         </button>
       )}
 
-      {open && (
-        <div
-          className={`absolute top-full z-50 mt-1.5 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl ${
-            sidebar ? "left-0 w-[280px]" : "right-0 w-[280px]"
-          }`}
-        >
-          <div className="max-h-[70vh] overflow-y-auto p-2">
-            {current && (
-              <div className="group relative mb-2 flex items-center justify-between rounded-xl bg-accent p-2 transition-colors hover:bg-accent/80">
-                <button
-                  onClick={() => setOpen(false)}
-                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-background">
-                    <Layers className="h-4 w-4 text-foreground" strokeWidth={1.5} />
-                  </div>
-                  <div className="flex flex-col items-start min-w-0">
-                    <span className="truncate text-sm font-medium text-foreground">
-                      {current.name}
-                    </span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {current.docCount ?? 0} docs
-                    </span>
-                  </div>
-                </button>
-                <Check className="mr-2 h-4 w-4 shrink-0 text-foreground" />
-              </div>
-            )}
+      {open &&
+        pos &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{ position: "fixed", top: pos.top, left: pos.left, width: MENU_W }}
+            className="z-(--z-dropdown) overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
+          >
+            <div className="max-h-[70vh] overflow-y-auto p-2">
+              {current && (
+                <div className="group relative mb-2 flex items-center justify-between rounded-xl bg-accent p-2 transition-colors hover:bg-accent/80">
+                  <button
+                    onClick={() => setOpen(false)}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background">
+                      <Layers className="h-4 w-4 text-foreground" strokeWidth={1.5} />
+                    </div>
+                    <div className="flex flex-col items-start min-w-0">
+                      <span className="truncate text-sm font-medium text-foreground">
+                        {current.name}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {current.docCount ?? 0} docs
+                      </span>
+                    </div>
+                  </button>
+                  <Check className="mr-2 h-4 w-4 shrink-0 text-foreground" />
+                </div>
+              )}
 
-            {workspaces.length > 1 && (
-              <div className="flex flex-col gap-0.5">
+              {workspaces.length > 1 && (
+                <div className="flex flex-col gap-0.5">
                   {workspaces
                     .filter((w) => w.id !== currentId)
                     .map((w) => (
@@ -149,8 +189,11 @@ export function WorkspaceMenu({
                           }}
                           className="flex min-w-0 flex-1 items-center gap-3 text-left"
                         >
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]">
-                            <FolderOpen className="h-4 w-4 text-muted-foreground" strokeWidth={1.5} />
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl">
+                            <FolderOpen
+                              className="h-4 w-4 text-muted-foreground"
+                              strokeWidth={1.5}
+                            />
                           </div>
                           <div className="flex flex-col items-start min-w-0">
                             <span className="truncate text-sm font-medium text-foreground">
@@ -163,73 +206,74 @@ export function WorkspaceMenu({
                         </button>
                       </div>
                     ))}
-              </div>
-            )}
-          </div>
-
-          {creating && (
-            <div className="border-t border-border p-2">
-              <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1">
-                <input
-                  autoFocus
-                  type="text"
-                  placeholder="Workspace name..."
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCreate();
-                    if (e.key === "Escape") {
-                      setCreating(false);
-                      setNewName("");
-                    }
-                  }}
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                />
-                <button
-                  onClick={handleCreate}
-                  disabled={!newName.trim()}
-                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
-                >
-                  <Check className="h-3.5 w-3.5" />
-                  Save
-                </button>
-              </div>
+                </div>
+              )}
             </div>
-          )}
 
-          <div className="flex border-t border-border bg-muted/50">
-            {!creating && (
-              <>
-                <ActionButton
-                  icon={PlusCircle}
-                  label="New"
-                  onClick={() => {
-                    setCreating(true);
-                    setNewName("");
-                  }}
-                />
-              </>
+            {creating && (
+              <div className="border-t border-border p-2">
+                <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1">
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="Workspace name..."
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCreate();
+                      if (e.key === "Escape") {
+                        setCreating(false);
+                        setNewName("");
+                      }
+                    }}
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                  <button
+                    onClick={handleCreate}
+                    disabled={!newName.trim()}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    Save
+                  </button>
+                </div>
+              </div>
             )}
-            <ActionButton icon={Upload} label="Import" onClick={() => fileRef.current?.click()} />
-            <ActionButton
-              icon={Download}
-              label="Export"
-              onClick={() => {
-                onExport();
-                setOpen(false);
-              }}
-            />
-            <ActionButton
-              icon={Users}
-              label="Share"
-              onClick={() => {
-                onShare();
-                setOpen(false);
-              }}
-            />
-          </div>
-        </div>
-      )}
+
+            <div className="flex border-t border-border bg-muted/50">
+              {!creating && (
+                <>
+                  <ActionButton
+                    icon={PlusCircle}
+                    label="New"
+                    onClick={() => {
+                      setCreating(true);
+                      setNewName("");
+                    }}
+                  />
+                </>
+              )}
+              <ActionButton icon={Upload} label="Import" onClick={() => fileRef.current?.click()} />
+              <ActionButton
+                icon={Download}
+                label="Export"
+                onClick={() => {
+                  onExport();
+                  setOpen(false);
+                }}
+              />
+              <ActionButton
+                icon={Users}
+                label="Share"
+                onClick={() => {
+                  onShare();
+                  setOpen(false);
+                }}
+              />
+            </div>
+          </div>,
+          document.body,
+        )}
 
       <input
         ref={fileRef}

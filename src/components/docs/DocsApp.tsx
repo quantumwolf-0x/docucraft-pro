@@ -405,7 +405,9 @@ export function DocsApp() {
           const ws = hashSharedWs || (list.find((w) => w.id === prefs.lastWorkspaceId) ?? list[0]);
           if (!alive) return;
           list.sort((a, b) => a.createdAt - b.createdAt);
-          setWorkspaces(list.map((w) => ({ id: w.id, name: w.name, docCount: w.files?.length || 0 })));
+          setWorkspaces(
+            list.map((w) => ({ id: w.id, name: w.name, docCount: w.files?.length || 0 })),
+          );
           hydrateWorkspace(ws);
           savePrefs({ lastWorkspaceId: ws.id });
         }
@@ -643,6 +645,34 @@ export function DocsApp() {
       },
     });
   };
+
+  const toggleArchiveFile = useCallback(
+    (id: string) => {
+      setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, isArchived: !f.isArchived } : f)));
+      markDirty();
+    },
+    [markDirty],
+  );
+
+  const downloadFile = useCallback(
+    (id: string) => {
+      const file = files.find((f) => f.id === id);
+      if (!file) return;
+      let url = "";
+      if (file.data) {
+        url = file.data;
+      } else {
+        const blob = new Blob([file.content], { type: file.mimeType || "text/markdown" });
+        url = URL.createObjectURL(blob);
+      }
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      if (!file.data) URL.revokeObjectURL(url);
+    },
+    [files],
+  );
 
   const renameFile = useCallback(
     (id: string, newName: string) => {
@@ -1044,10 +1074,8 @@ export function DocsApp() {
     navigate({ to: "/" });
   }, [navigate, newWorkspace]);
 
-
-
   const dragOverlay = globalDrag ? (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm border-4 border-dashed border-primary transition-all duration-300">
+    <div className="fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-background/80 backdrop-blur-sm border-4 border-dashed border-primary transition-all duration-300">
       <div className="rounded-3xl bg-card p-10 shadow-2xl flex flex-col items-center gap-6 animate-in fade-in zoom-in duration-300">
         <Upload className="h-16 w-16 text-primary animate-bounce" />
         <div className="text-center">
@@ -1095,9 +1123,9 @@ export function DocsApp() {
         <div className="flex min-h-[calc(100dvh-4rem)] flex-col items-center justify-center gap-6 px-6 text-center">
           <Upload className="h-14 w-14 text-muted-foreground" />
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Drop markdown files to read</h1>
+            <h1 className="text-2xl font-bold text-foreground">Drop files to view and edit</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Documents, spreadsheets, PDFs, and presentations render instantly.
+              We support Markdown, PDFs, Spreadsheets, Presentations, Images, and more!
             </p>
           </div>
           <button
@@ -1126,27 +1154,27 @@ export function DocsApp() {
 
   return (
     <div className="min-h-dvh bg-background">
-        <Header
-          hideOnDesktop
-          theme={theme}
-          onCycleTheme={cycleTheme}
-          onMenu={() => setDrawerOpen(true)}
-          onOpenPalette={() => setPaletteOpen(true)}
-          hasFiles
-          onAddFiles={() => inputRef.current?.click()}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
-          saveStatus={saveStatus}
-          onHome={goHome}
-          workspaces={workspaces}
-          currentWorkspaceId={workspaceId}
-          onSwitchWorkspace={switchWorkspace}
-          onNewWorkspace={newWorkspace}
-          onImportWorkspace={importWorkspace}
-          onExportWorkspace={exportWorkspace}
-          onShareWorkspace={shareWorkspace}
-          onDeleteWorkspace={deleteWorkspace}
-        />
+      <Header
+        hideOnDesktop
+        theme={theme}
+        onCycleTheme={cycleTheme}
+        onMenu={() => setDrawerOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
+        hasFiles
+        onAddFiles={() => inputRef.current?.click()}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleSidebar}
+        saveStatus={saveStatus}
+        onHome={goHome}
+        workspaces={workspaces}
+        currentWorkspaceId={workspaceId}
+        onSwitchWorkspace={switchWorkspace}
+        onNewWorkspace={newWorkspace}
+        onImportWorkspace={importWorkspace}
+        onExportWorkspace={exportWorkspace}
+        onShareWorkspace={shareWorkspace}
+        onDeleteWorkspace={deleteWorkspace}
+      />
 
       <CommandPalette
         files={files}
@@ -1158,7 +1186,7 @@ export function DocsApp() {
       <div className="flex">
         <div
           ref={sidebarWrapRef}
-          className="sticky top-0 hidden h-dvh shrink-0 border-r border-border bg-background md:block md:portrait:hidden relative"
+          className="sticky top-0 hidden h-dvh shrink-0 border-r border-border bg-background md:block md:portrait:hidden"
         >
           <div ref={sidebarInnerRef} className="h-full" style={{ width: sidebarWidth }}>
             <Sidebar
@@ -1171,6 +1199,8 @@ export function DocsApp() {
               onSelect={handleSelect}
               onAddFiles={() => inputRef.current?.click()}
               onRemoveFile={removeFile}
+              onArchiveFile={toggleArchiveFile}
+              onDownloadFile={downloadFile}
               onRenameFile={renameFile}
               onReorderFile={reorderFile}
               onSortByName={sortFilesByName}
@@ -1210,9 +1240,9 @@ export function DocsApp() {
 
           <div
             className="absolute inset-y-0 left-0 flex w-14 flex-col items-center gap-4 border-r border-border bg-background py-3 z-20 transition-opacity duration-200"
-            style={{ 
-              opacity: sidebarCollapsed ? 1 : 0, 
-              pointerEvents: sidebarCollapsed ? "auto" : "none" 
+            style={{
+              opacity: sidebarCollapsed ? 1 : 0,
+              pointerEvents: sidebarCollapsed ? "auto" : "none",
             }}
           >
             <button
@@ -1268,21 +1298,22 @@ export function DocsApp() {
               aria-orientation="vertical"
               aria-label="Resize sidebar (double-click to reset)"
               title="Drag to resize · double-click to reset"
-              className="absolute right-0 top-[60px] z-10 h-[calc(100%-60px)] w-1.5 cursor-col-resize"
-            >
-            </div>
+              className="absolute right-0 top-16 z-10 h-[calc(100%-4rem)] w-1.5 cursor-col-resize"
+            ></div>
           )}
         </div>
 
         {drawerOpen && (
-          <div className="fixed inset-0 z-50 md:hidden">
+          <div className="fixed inset-0 z-(--z-overlay) md:hidden">
             <div
               className="absolute inset-0 bg-foreground/20 backdrop-blur-sm"
               onClick={() => setDrawerOpen(false)}
             />
             <div className="absolute left-0 top-0 h-full w-80 max-w-[85vw] border-r border-border bg-background shadow-2xl animate-in slide-in-from-left duration-200">
               <div className="flex h-14 items-center justify-between border-b border-border px-4">
-                <span className="text-sm font-semibold truncate px-1">{workspaceNameRef.current || "Workspace"}</span>
+                <span className="text-sm font-semibold truncate px-1">
+                  {workspaceNameRef.current || "Workspace"}
+                </span>
                 <button onClick={() => setDrawerOpen(false)} aria-label="Close">
                   <X className="h-4 w-4" />
                 </button>
@@ -1298,6 +1329,8 @@ export function DocsApp() {
                   onSelect={handleSelect}
                   onAddFiles={() => inputRef.current?.click()}
                   onRemoveFile={removeFile}
+                  onArchiveFile={toggleArchiveFile}
+                  onDownloadFile={downloadFile}
                   onRenameFile={renameFile}
                   onReorderFile={reorderFile}
                   onSortByName={sortFilesByName}
@@ -1362,6 +1395,7 @@ export function DocsApp() {
               onSetReadingMode={setReadingMode}
               readingFont={readingFont}
               onSetReadingFont={setReadingFont}
+              onToggleArchiveFile={toggleArchiveFile}
             />
           ) : activeFile &&
             (activeFile.kind === "markdown" || activeFile.kind === "text" || !activeFile.kind) ? (
@@ -1375,12 +1409,10 @@ export function DocsApp() {
               onContentChange={handleContentChange}
               nextReadingMin={nextReadingMin}
               isBookmarked={
-                !!activeFile &&
-                !!activeHeadingId &&
-                bookmarks.includes(`${activeFile.id}#${activeHeadingId}`)
+                !!activeFile && bookmarks.includes(`${activeFile.id}#${activeHeadingId || "root"}`)
               }
               onToggleBookmark={() =>
-                activeFile && activeHeadingId && toggleBookmark(activeFile.id, activeHeadingId)
+                activeFile && toggleBookmark(activeFile.id, activeHeadingId || "root")
               }
               highlights={highlights.filter((h) => h.fileId === activeFile.id)}
               onAddHighlight={(hl) => addHighlight(hl, activeFile.id)}
@@ -1400,6 +1432,9 @@ export function DocsApp() {
               file={activeFile}
               isBookmarked={bookmarks.includes(`${activeFile.id}#root`)}
               onToggleBookmark={() => toggleBookmark(activeFile.id, "root")}
+              prevFile={prevFile}
+              nextFile={nextFile}
+              onNavFile={(fId) => handleSelect(fId, undefined)}
             />
           ) : null}
         </main>
@@ -1510,7 +1545,7 @@ function Header({
 }) {
   return (
     <header
-      className={`sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6 relative ${
+      className={`z-(--z-nav) flex h-16 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6 relative ${
         hideOnDesktop ? "lg:hidden md:landscape:hidden" : ""
       }`}
     >
@@ -1553,10 +1588,10 @@ function Header({
             <Search className="h-3.5 w-3.5" />
             <span>Search...</span>
             <span className="ml-auto flex items-center gap-1">
-              <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
+              <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-xs">
                 ⌘
               </kbd>
-              <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
+              <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-xs">
                 K
               </kbd>
             </span>

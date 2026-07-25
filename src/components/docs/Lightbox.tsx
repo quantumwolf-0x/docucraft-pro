@@ -20,7 +20,7 @@ export function Lightbox({
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-6 animate-in fade-in-0"
+      className="fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-black/85 p-6 animate-in fade-in-0"
       onClick={onClose}
     >
       <button
@@ -36,9 +36,7 @@ export function Lightbox({
           alt={alt}
           className="max-h-[85vh] max-w-full rounded-lg object-contain shadow-2xl"
         />
-        {alt && (
-          <figcaption className="mt-3 text-center text-sm text-white/80">{alt}</figcaption>
-        )}
+        {alt && <figcaption className="mt-3 text-center text-sm text-white/80">{alt}</figcaption>}
       </figure>
     </div>
   );

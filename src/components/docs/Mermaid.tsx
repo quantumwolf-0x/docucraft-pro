@@ -24,9 +24,7 @@ function quoteErEntities(src: string): string {
   return src
     .split("\n")
     .map((line) => {
-      const rel = line.match(
-        /^(\s*)([\w".:-]+)(\s+)(\S*--\S*)(\s+)([\w".:-]+)(\s*:\s*.*)$/,
-      );
+      const rel = line.match(/^(\s*)([\w".:-]+)(\s+)(\S*--\S*)(\s+)([\w".:-]+)(\s*:\s*.*)$/);
       if (!rel) return line;
       return rel[1] + q(rel[2]) + rel[3] + rel[4] + rel[5] + q(rel[6]) + rel[7];
     })
@@ -161,13 +159,13 @@ export function Mermaid({ code }: { code: string }) {
           // Portal to <body>: an ancestor (the article carries a GSAP transform)
           // would otherwise become the containing block for this fixed overlay,
           // trapping it inside the article box instead of the viewport.
-          <div className="fixed inset-0 z-[70] flex flex-col bg-background">
+          <div className="fixed inset-0 z-(--z-overlay) flex flex-col bg-background">
             {/* Fixed, top-most Close so it stays reachable through any zoom/pan on
                 any viewport — sits above the overlay and the stage's zoom controls. */}
             <button
               onClick={() => setFullscreen(false)}
               aria-label="Close fullscreen"
-              className="fixed right-3 top-3 z-[80] inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background/90 px-3 text-sm font-medium text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground active:scale-95"
+              className="fixed right-3 top-3 z-80 inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background/90 px-3 text-sm font-medium text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground active:scale-95"
             >
               <X className="h-4 w-4" />
               Close
@@ -256,7 +254,7 @@ function Stage({
       <div
         ref={stageRef}
         className={`flex flex-1 cursor-grab items-center justify-center overflow-hidden p-4 active:cursor-grabbing ${
-          fill ? "" : "min-h-[160px]"
+          fill ? "" : "min-h-40"
         }`}
         onMouseDown={(e) => (dragRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y })}
         onMouseMove={(e) => {

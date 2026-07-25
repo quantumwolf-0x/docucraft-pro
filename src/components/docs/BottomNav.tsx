@@ -1,4 +1,4 @@
-import { Home, Bookmark, Plus, Settings, FolderOpen, Trash2, CheckCircle2 } from "lucide-react";
+import { Home, Star, Plus, Settings, FolderOpen, Trash2, CheckCircle2 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "../ui/sheet";
 import { useState, useRef, useEffect } from "react";
 
@@ -13,7 +13,7 @@ export function BottomNav({
   onRemoveBookmark,
   onHome,
   onUpload,
-  onSettings
+  onSettings,
 }: any) {
   const currentWorkspace = workspaces.find((w: any) => w.id === currentWorkspaceId);
 
@@ -33,20 +33,22 @@ export function BottomNav({
   };
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 flex h-16 items-center justify-between border-t border-border bg-background/80 px-6 backdrop-blur-lg lg:hidden">
-      
+    <nav className="fixed bottom-0 left-0 right-0 z-(--z-nav) flex h-16 items-center justify-between border-t border-border bg-background/80 px-6 backdrop-blur-lg lg:hidden">
       {/* 1. Home */}
-      <button onClick={onHome} className="flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors hover:text-foreground">
+      <button
+        onClick={onHome}
+        className="flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+      >
         <Home className="h-5 w-5" />
-        <span className="text-[10px] font-medium">Home</span>
+        <span className="text-xs font-medium">Home</span>
       </button>
 
       {/* 2. Bookmarks (Bottom Sheet) */}
       <Sheet>
         <SheetTrigger asChild>
           <button className="flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors hover:text-foreground">
-            <Bookmark className="h-5 w-5" />
-            <span className="text-[10px] font-medium">Bookmarks</span>
+            <Star className="h-5 w-5" />
+            <span className="text-xs font-medium">Bookmarks</span>
           </button>
         </SheetTrigger>
         <SheetContent side="bottom" className="max-h-[80vh] overflow-y-auto">
@@ -58,7 +60,10 @@ export function BottomNav({
               <p className="text-sm text-muted-foreground">No bookmarks yet.</p>
             ) : (
               bookmarks.map((bm: any) => (
-                <div key={`${bm.fileId}-${bm.subtopicId}`} className="group flex items-center justify-between rounded-lg border p-3">
+                <div
+                  key={`${bm.fileId}-${bm.subtopicId}`}
+                  className="group flex items-center justify-between rounded-lg border p-3"
+                >
                   <button
                     onClick={() => onSelectBookmark(bm.fileId, bm.subtopicId)}
                     className="flex-1 text-left text-sm hover:underline"
@@ -79,7 +84,7 @@ export function BottomNav({
       </Sheet>
 
       {/* 3. Upload CTA */}
-      <button 
+      <button
         onClick={onUpload}
         className="flex h-12 w-12 -translate-y-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 active:scale-95"
       >
@@ -87,9 +92,12 @@ export function BottomNav({
       </button>
 
       {/* 4. Settings */}
-      <button onClick={onSettings} className="flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors hover:text-foreground">
+      <button
+        onClick={onSettings}
+        className="flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+      >
         <Settings className="h-5 w-5" />
-        <span className="text-[10px] font-medium">Settings</span>
+        <span className="text-xs font-medium">Settings</span>
       </button>
 
       {/* 5. Workspace (Bottom Sheet) */}
@@ -97,7 +105,7 @@ export function BottomNav({
         <SheetTrigger asChild>
           <button className="flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors hover:text-foreground">
             <FolderOpen className="h-5 w-5" />
-            <span className="text-[10px] font-medium">Workspace</span>
+            <span className="text-xs font-medium">Workspace</span>
           </button>
         </SheetTrigger>
         <SheetContent side="bottom" className="max-h-[80vh] overflow-y-auto">
@@ -122,7 +130,7 @@ export function BottomNav({
                 {ws.id === currentWorkspaceId && <CheckCircle2 className="h-4 w-4 text-primary" />}
               </button>
             ))}
-            
+
             {/* Create inline input */}
             <div className="mt-2">
               {isCreating ? (
@@ -163,7 +171,6 @@ export function BottomNav({
           </div>
         </SheetContent>
       </Sheet>
-
     </nav>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Clock, FileText, FolderOpen, Upload } from "lucide-react";
+import { Modal } from "@/components/ui/modal";
 
 export interface WorkspaceFileItem {
   id: string;
@@ -44,8 +45,6 @@ export function HomePage({
     if (!userName) setShowModal(true);
   }, [userName]);
 
-
-
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const value = draft.trim();
@@ -65,7 +64,7 @@ export function HomePage({
           </h1>
         </header>
 
-        <div className="mt-10 w-full sm:w-[400px]">
+        <div className="mt-10 w-full sm:w-96">
           <div
             className="w-full"
             onDragOver={(e) => {
@@ -104,8 +103,6 @@ export function HomePage({
           </div>
         </div>
 
-
-
         <section className="mt-12">
           <div className="mb-6 flex items-end justify-between gap-4">
             <div className="min-w-0">
@@ -113,7 +110,7 @@ export function HomePage({
                 {workspaces.find((w) => w.current)?.name || "Workspace"}
               </h2>
               <p className="mt-1 text-sm font-medium text-muted-foreground">
-                {files.length} {files.length === 1 ? 'document' : 'documents'}
+                {files.length} {files.length === 1 ? "document" : "documents"}
               </p>
             </div>
             <button
@@ -158,38 +155,42 @@ export function HomePage({
         </section>
       </main>
 
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-2xl border border-border bg-background p-6 shadow-2xl">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Welcome
-            </div>
-            <h2 className="mt-2 text-2xl font-bold tracking-tight text-foreground">
-              What do we call you?
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              We&apos;ll remember it on this device to personalize your reading.
-            </p>
-            <form className="mt-5 flex gap-2" onSubmit={submit}>
-              <input
-                autoFocus
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                placeholder="Your name"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
-              />
-              <button
-                type="submit"
-                disabled={!draft.trim()}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
-              >
-                Continue
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </form>
-          </div>
+      <Modal
+        open={showModal}
+        onOpenChange={() => {
+          /* Name is required — keep the modal open until the form is submitted. */
+        }}
+        size="sm"
+        showClose={false}
+        bodyClassName="p-6"
+      >
+        <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Welcome
         </div>
-      )}
+        <h2 className="mt-2 text-2xl font-bold tracking-tight text-foreground">
+          What do we call you?
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          We&apos;ll remember it on this device to personalize your reading.
+        </p>
+        <form className="mt-5 flex gap-2" onSubmit={submit}>
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Your name"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+          />
+          <button
+            type="submit"
+            disabled={!draft.trim()}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            Continue
+            <ArrowRight className="h-4 w-4" />
+          </button>
+        </form>
+      </Modal>
     </>
   );
 }

@@ -134,7 +134,10 @@ export function AskAiPanel({
 
   return (
     <div className="fixed inset-0 z-30 flex lg:z-70 md:landscape:z-70 lg:justify-end md:landscape:justify-end pb-[env(safe-area-inset-bottom)] mb-16 lg:mb-0 md:landscape:mb-0 lg:pb-0 md:landscape:pb-0">
-      <div className="absolute inset-0 bg-foreground/20 backdrop-blur-sm hidden lg:block md:landscape:block" onClick={onClose} />
+      <div
+        className="absolute inset-0 bg-foreground/20 backdrop-blur-sm hidden lg:block md:landscape:block"
+        onClick={onClose}
+      />
       <aside className="relative flex h-full w-full flex-col bg-background animate-in slide-in-from-right duration-200 lg:max-w-md md:landscape:max-w-md lg:border-l md:landscape:border-l border-border lg:shadow-2xl md:landscape:shadow-2xl">
         {/* Header */}
         <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
@@ -158,7 +161,7 @@ export function AskAiPanel({
             <div className="min-h-0 flex-1 overflow-y-auto">
               {/* Context selector */}
               <div className="border-b border-border p-4">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Context
                 </div>
                 <div className="grid grid-cols-3 gap-1.5">
@@ -221,7 +224,7 @@ export function AskAiPanel({
               <div className="space-y-4 p-4">
                 {ACTION_GROUPS.map((group) => (
                   <div key={group.id}>
-                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                       {group.label}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -253,7 +256,7 @@ export function AskAiPanel({
               {(ai.text || ai.isStreaming || ai.error) && (
                 <div className="border-t border-border p-4">
                   {ai.scopeLabel && (
-                    <div className="mb-2 text-[11px] font-medium text-muted-foreground">
+                    <div className="mb-2 text-xs font-medium text-muted-foreground">
                       Context sent: {ai.scopeLabel}
                     </div>
                   )}

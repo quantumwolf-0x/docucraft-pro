@@ -11,7 +11,7 @@ import {
   Minimize,
   Presentation,
   Search,
-  Bookmark,
+  Star,
   Trash2,
   ZoomIn,
   ZoomOut,
@@ -26,17 +26,38 @@ import {
   getDocumentKind,
   googleUrl,
 } from "@/lib/document-utils";
+import { ViewerHeader, HeaderTitle, type ViewerNav } from "./ViewerHeader";
 
 interface Props {
   file: MdFile;
   isBookmarked?: boolean;
   onToggleBookmark?: () => void;
   onRemoveFile?: () => void;
+  /** Sibling files, so the shared header's prev/next can move between files. */
+  prevFile?: MdFile | null;
+  nextFile?: MdFile | null;
+  onNavFile?: (fileId: string) => void;
   /** Rendered inside markdown content: strip all chrome, show only the content. */
   embedded?: boolean;
 }
 interface GoogleProps extends Props {
   isSlides: boolean;
+}
+
+/** File-level prev/next for the shared header — used by every non-deck viewer. */
+function useFileNav({
+  prevFile,
+  nextFile,
+  onNavFile,
+}: Pick<Props, "prevFile" | "nextFile" | "onNavFile">): ViewerNav {
+  return {
+    onPrev: () => prevFile && onNavFile?.(prevFile.id),
+    onNext: () => nextFile && onNavFile?.(nextFile.id),
+    prevDisabled: !prevFile || !onNavFile,
+    nextDisabled: !nextFile || !onNavFile,
+    prevLabel: "Previous file",
+    nextLabel: "Next file",
+  };
 }
 
 export function DocumentViewer(props: Props) {
@@ -57,45 +78,49 @@ function ViewerFrame({
   file,
   children,
   action,
+  icon,
   isBookmarked,
   onToggleBookmark,
-  onDelete,
+  prevFile,
+  nextFile,
+  onNavFile,
 }: {
   file: MdFile;
   children: React.ReactNode;
   action?: React.ReactNode;
+  /** File-type glyph shown in the header chip; defaults to a generic document. */
+  icon?: React.ReactNode;
   isBookmarked?: boolean;
   onToggleBookmark?: () => void;
-  onDelete?: () => void;
-}) {
-  const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
+} & Pick<Props, "prevFile" | "nextFile" | "onNavFile">) {
+  const nav = useFileNav({ prevFile, nextFile, onNavFile });
   return (
     <section className="min-h-[calc(100dvh-4rem)] bg-background">
-      <div className="sticky top-0 z-20 flex min-h-14 items-center gap-3 border-b border-border bg-background/90 px-4 backdrop-blur md:px-7">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <FileText className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-foreground">{file.name}</div>
-        </div>
-        {onToggleBookmark && (
-          <button
-            onClick={onToggleBookmark}
-            title={isBookmarked ? "Remove bookmark" : "Bookmark this file"}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <Bookmark className={`h-4 w-4 ${isBookmarked ? "fill-primary text-primary" : ""}`} />
-          </button>
-        )}
-        {action}
-
-      </div>
+      <ViewerHeader
+        nav={nav}
+        center={<HeaderTitle icon={icon ?? <FileText className="h-4 w-4" />} title={file.name} />}
+        actions={
+          <>
+            {onToggleBookmark && (
+              <button
+                type="button"
+                onClick={onToggleBookmark}
+                title={isBookmarked ? "Unstar" : "Star"}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
+              </button>
+            )}
+            {action}
+          </>
+        }
+      />
       {children}
     </section>
   );
 }
 
-function PdfViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props) {
+function PdfViewer({ file, isBookmarked, onToggleBookmark, prevFile, nextFile, onNavFile }: Props) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     const blob = dataUrlToBlob(file.data, "application/pdf");
@@ -109,18 +134,9 @@ function PdfViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props
       file={file}
       isBookmarked={isBookmarked}
       onToggleBookmark={onToggleBookmark}
-      onDelete={onRemoveFile}
-      action={
-        url ? (
-          <a
-            href={url}
-            download={file.name}
-            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-accent"
-          >
-            <Download className="h-3.5 w-3.5" /> Download
-          </a>
-        ) : undefined
-      }
+      prevFile={prevFile}
+      nextFile={nextFile}
+      onNavFile={onNavFile}
     >
       {url ? (
         <iframe
@@ -135,7 +151,14 @@ function PdfViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props
   );
 }
 
-function DocxViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props) {
+function DocxViewer({
+  file,
+  isBookmarked,
+  onToggleBookmark,
+  prevFile,
+  nextFile,
+  onNavFile,
+}: Props) {
   const [html, setHtml] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
@@ -162,7 +185,14 @@ function DocxViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Prop
     };
   }, [file.data]);
   return (
-    <ViewerFrame file={file} isBookmarked={isBookmarked} onToggleBookmark={onToggleBookmark} onDelete={onRemoveFile}>
+    <ViewerFrame
+      file={file}
+      isBookmarked={isBookmarked}
+      onToggleBookmark={onToggleBookmark}
+      prevFile={prevFile}
+      nextFile={nextFile}
+      onNavFile={onNavFile}
+    >
       {error ? (
         <ErrorState message={error} />
       ) : !html ? (
@@ -182,7 +212,14 @@ interface MammothBrowser {
 }
 
 type SheetData = { name: string; rows: string[][] };
-function SpreadsheetViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props) {
+function SpreadsheetViewer({
+  file,
+  isBookmarked,
+  onToggleBookmark,
+  prevFile,
+  nextFile,
+  onNavFile,
+}: Props) {
   const [sheets, setSheets] = useState<SheetData[]>([]);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
@@ -223,16 +260,23 @@ function SpreadsheetViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile 
       : source;
   }, [sheet, query, sort]);
   return (
-    <ViewerFrame file={file} isBookmarked={isBookmarked} onToggleBookmark={onToggleBookmark} onDelete={onRemoveFile}>
+    <ViewerFrame
+      file={file}
+      isBookmarked={isBookmarked}
+      onToggleBookmark={onToggleBookmark}
+      prevFile={prevFile}
+      nextFile={nextFile}
+      onNavFile={onNavFile}
+    >
       {error ? (
         <ErrorState message={error} />
       ) : !sheet ? (
         <Loading label="Loading spreadsheet" />
       ) : (
         <div className="p-3 md:p-6">
-          <div className="mx-auto max-w-[1600px] overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="mx-auto max-w-7xl overflow-hidden rounded-xl border border-border bg-card shadow-sm">
             <div className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/30 px-3 py-2.5">
-              <div className="relative min-w-[220px] flex-1">
+              <div className="relative min-w-56 flex-1">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <input
                   value={query}
@@ -316,7 +360,14 @@ function SpreadsheetViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile 
   );
 }
 
-function JsonViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props) {
+function JsonViewer({
+  file,
+  isBookmarked,
+  onToggleBookmark,
+  prevFile,
+  nextFile,
+  onNavFile,
+}: Props) {
   const [query, setQuery] = useState("");
   const formatted = useMemo(() => {
     try {
@@ -327,7 +378,14 @@ function JsonViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Prop
   }, [file.content]);
   const lines = formatted.split("\n");
   return (
-    <ViewerFrame file={file} isBookmarked={isBookmarked} onToggleBookmark={onToggleBookmark} onDelete={onRemoveFile}>
+    <ViewerFrame
+      file={file}
+      isBookmarked={isBookmarked}
+      onToggleBookmark={onToggleBookmark}
+      prevFile={prevFile}
+      nextFile={nextFile}
+      onNavFile={onNavFile}
+    >
       <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
         <div className="relative mb-4 max-w-md">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -338,7 +396,7 @@ function JsonViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Prop
             className="w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
           />
         </div>
-        <pre className="max-h-[calc(100dvh-13rem)] overflow-auto rounded-xl border border-border bg-[#101722] p-4 text-[13px] leading-6 text-slate-200">
+        <pre className="max-h-[calc(100dvh-13rem)] overflow-auto rounded-xl border border-border bg-[#101722] p-4 text-sm leading-6 text-slate-200">
           <code>
             {lines.map((line, index) => (
               <div
@@ -461,7 +519,10 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
   // just the slide and two swipe buttons.
   if (embedded) {
     return (
-      <section ref={containerRef} className="presentation-shell relative bg-background text-foreground">
+      <section
+        ref={containerRef}
+        className="presentation-shell relative bg-background text-foreground"
+      >
         {error ? (
           <ErrorState message={error} />
         ) : !slide ? (
@@ -471,7 +532,12 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
             {slideEl}
             {slides.length > 1 && (
               <>
-                <button onClick={goPrev} disabled={current === 0} aria-label="Previous slide" className="deck-nav left-3">
+                <button
+                  onClick={goPrev}
+                  disabled={current === 0}
+                  aria-label="Previous slide"
+                  className="deck-nav left-3"
+                >
                   <ChevronLeft className="h-5 w-5" />
                 </button>
                 <button
@@ -495,50 +561,43 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
       ref={containerRef}
       className="presentation-shell min-h-[calc(100dvh-4rem)] bg-background text-foreground"
     >
-      <div className="flex h-14 items-center gap-3 border-b border-border px-4">
-        <Presentation className="h-4 w-4 text-primary" />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{file.name}</span>
-        {slides.length > 0 && (
-          <div className="flex items-center gap-1">
+      <ViewerHeader
+        nav={{
+          onPrev: goPrev,
+          onNext: goNext,
+          prevDisabled: current <= 0,
+          nextDisabled: current >= slides.length - 1,
+          prevLabel: "Previous slide",
+          nextLabel: "Next slide",
+        }}
+        center={<HeaderTitle icon={<Presentation className="h-4 w-4" />} title={file.name} />}
+        actions={
+          <>
+            {slides.length > 0 && (
+              <span className="min-w-12 text-center text-xs text-muted-foreground tabular-nums">
+                {current + 1} / {slides.length}
+              </span>
+            )}
+            {onToggleBookmark && (
+              <button
+                type="button"
+                onClick={onToggleBookmark}
+                title={isBookmarked ? "Unstar" : "Star"}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
+              </button>
+            )}
             <button
-              onClick={() => setCurrent((value) => Math.max(value - 1, 0))}
-              disabled={current === 0}
-              aria-label="Previous slide"
-              className="rounded p-1.5 hover:bg-accent transition-colors disabled:opacity-25 disabled:hover:bg-transparent"
+              onClick={toggleFullscreen}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
             >
-              <ChevronLeft className="h-4 w-4" />
+              {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
             </button>
-            <span className="min-w-[3rem] text-center text-xs text-muted-foreground tabular-nums">
-              {current + 1} / {slides.length}
-            </span>
-            <button
-              onClick={() => setCurrent((value) => Math.min(value + 1, slides.length - 1))}
-              disabled={current === slides.length - 1}
-              aria-label="Next slide"
-              className="rounded p-1.5 hover:bg-accent transition-colors disabled:opacity-25 disabled:hover:bg-transparent"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-        {onToggleBookmark && (
-          <button
-            onClick={onToggleBookmark}
-            title={isBookmarked ? "Remove bookmark" : "Bookmark this file"}
-            className="rounded p-1.5 hover:bg-accent transition-colors"
-          >
-            <Bookmark className={`h-4 w-4 ${isBookmarked ? "fill-primary text-primary" : "text-muted-foreground hover:text-foreground"}`} />
-          </button>
-        )}
-        <button
-          onClick={toggleFullscreen}
-          className="rounded p-1.5 hover:bg-accent transition-colors"
-          aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-        >
-          {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
-        </button>
-
-      </div>
+          </>
+        }
+      />
       {error ? (
         <ErrorState message={error} />
       ) : !slide ? (
@@ -556,7 +615,7 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
                 className={`presentation-thumb ${current === index ? "is-active" : ""}`}
                 aria-label={`Show slide ${item.number}`}
               >
-                <span className="text-[10px] text-muted-foreground">{item.number}</span>
+                <span className="text-xs text-muted-foreground">{item.number}</span>
                 <span className="presentation-thumb-card">
                   <strong>{item.title}</strong>
                   <small>{item.text}</small>
@@ -570,11 +629,26 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
   );
 }
 
-function GoogleViewer({ file, isSlides, isBookmarked, onToggleBookmark, onRemoveFile }: GoogleProps) {
+function GoogleViewer({
+  file,
+  isSlides,
+  isBookmarked,
+  onToggleBookmark,
+  prevFile,
+  nextFile,
+  onNavFile,
+}: GoogleProps) {
   const url = googleUrl(file.content);
   const preview = url?.replace(/\/edit(?:\?.*)?$/, "/preview");
   return (
-    <ViewerFrame file={file} isBookmarked={isBookmarked} onToggleBookmark={onToggleBookmark} onDelete={onRemoveFile}>
+    <ViewerFrame
+      file={file}
+      isBookmarked={isBookmarked}
+      onToggleBookmark={onToggleBookmark}
+      prevFile={prevFile}
+      nextFile={nextFile}
+      onNavFile={onNavFile}
+    >
       {preview ? (
         <iframe
           title={`Google ${isSlides ? "Slides" : "Doc"} ${file.name}`}
@@ -590,7 +664,14 @@ function GoogleViewer({ file, isSlides, isBookmarked, onToggleBookmark, onRemove
     </ViewerFrame>
   );
 }
-function ImageViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props) {
+function ImageViewer({
+  file,
+  isBookmarked,
+  onToggleBookmark,
+  prevFile,
+  nextFile,
+  onNavFile,
+}: Props) {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -617,7 +698,8 @@ function ImageViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Pro
   // Prefer the stored data URL; fall back to inline text (data:/http) so legacy
   // saves and linked images still render. SVG, GIF, WebP, AVIF, etc. all ride
   // the browser's native <img> decoder — no format-specific handling needed.
-  const src = file.data || (/^(data:|https?:)/.test(file.content.trim()) ? file.content.trim() : "");
+  const src =
+    file.data || (/^(data:|https?:)/.test(file.content.trim()) ? file.content.trim() : "");
 
   const reset = () => {
     setZoom(1);
@@ -656,66 +738,59 @@ function ImageViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Pro
   return (
     <div ref={containerRef} className="bg-background">
       <ViewerFrame
-      file={file}
-      isBookmarked={isBookmarked}
-      onToggleBookmark={onToggleBookmark}
-      onDelete={onRemoveFile}
-      action={
-        <div className="flex items-center gap-1">
-          <IconBtn
-            label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-            onClick={toggleFullscreen}
-            disabled={!src || broken}
-          >
-            {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
-          </IconBtn>
-          {src && (
-            <a
-              href={src}
-              download={file.name}
-              className="ml-1 inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-accent"
+        file={file}
+        isBookmarked={isBookmarked}
+        onToggleBookmark={onToggleBookmark}
+        prevFile={prevFile}
+        nextFile={nextFile}
+        onNavFile={onNavFile}
+        action={
+          <div className="flex items-center gap-1">
+            <IconBtn
+              label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              onClick={toggleFullscreen}
+              disabled={!src || broken}
             >
-              <Download className="h-3.5 w-3.5" /> Download
-            </a>
-          )}
-        </div>
-      }
-    >
-      {!src ? (
-        <ErrorState message="This image is missing its data. Remove it and upload the file again." />
-      ) : broken ? (
-        <ErrorState message="This image could not be decoded by the browser." />
-      ) : (
-        <div
-          onWheel={onWheel}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          className="image-canvas flex min-h-[calc(100dvh-7.5rem)] items-center justify-center overflow-hidden p-4 md:p-8"
-          style={{ cursor: zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "default" }}
-        >
-          <img
-            src={src}
-            alt={file.name}
-            draggable={false}
-            onLoad={(e) =>
-              setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })
-            }
-            onError={() => setBroken(true)}
-            className="max-h-full max-w-full select-none rounded-md shadow-lg"
-            style={{
-              transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom}) rotate(${rotation}deg)`,
-              transition: dragRef.current ? "none" : "transform 0.12s ease-out",
-            }}
-          />
-        </div>
-      )}
-      {natural && src && !broken && (
-        <div className="pointer-events-none fixed bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/90 px-3 py-1 text-[11px] font-medium tabular-nums text-muted-foreground backdrop-blur">
-          {natural.w} × {natural.h}
-        </div>
-      )}
-    </ViewerFrame>
+              {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+            </IconBtn>
+          </div>
+        }
+      >
+        {!src ? (
+          <ErrorState message="This image is missing its data. Remove it and upload the file again." />
+        ) : broken ? (
+          <ErrorState message="This image could not be decoded by the browser." />
+        ) : (
+          <div
+            onWheel={onWheel}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            className="image-canvas flex min-h-[calc(100dvh-7.5rem)] items-center justify-center overflow-hidden p-4 md:p-8"
+            style={{ cursor: zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "default" }}
+          >
+            <img
+              src={src}
+              alt={file.name}
+              draggable={false}
+              onLoad={(e) =>
+                setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })
+              }
+              onError={() => setBroken(true)}
+              className="max-h-full max-w-full select-none rounded-md shadow-lg"
+              style={{
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+                transition: dragRef.current ? "none" : "transform 0.12s ease-out",
+              }}
+            />
+          </div>
+        )}
+        {natural && src && !broken && (
+          <div className="pointer-events-none fixed bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium tabular-nums text-muted-foreground backdrop-blur">
+            {natural.w} × {natural.h}
+          </div>
+        )}
+      </ViewerFrame>
     </div>
   );
 }
@@ -744,9 +819,23 @@ function IconBtn({
   );
 }
 
-function UnknownViewer({ file, isBookmarked, onToggleBookmark, onRemoveFile }: Props) {
+function UnknownViewer({
+  file,
+  isBookmarked,
+  onToggleBookmark,
+  prevFile,
+  nextFile,
+  onNavFile,
+}: Props) {
   return (
-    <ViewerFrame file={file} isBookmarked={isBookmarked} onToggleBookmark={onToggleBookmark} onDelete={onRemoveFile}>
+    <ViewerFrame
+      file={file}
+      isBookmarked={isBookmarked}
+      onToggleBookmark={onToggleBookmark}
+      prevFile={prevFile}
+      nextFile={nextFile}
+      onNavFile={onNavFile}
+    >
       <ErrorState message="This file was uploaded successfully, but this browser does not have a previewer for its format yet." />
     </ViewerFrame>
   );

@@ -8,10 +8,13 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Drop markdown files to instantly render a beautifully navigable documentation site with search, sidebar, and syntax highlighting.",
+          "Drop files to instantly view and edit a beautifully navigable workspace with support for Markdown, PDFs, Spreadsheets, Presentations, and more.",
       },
       { property: "og:title", content: "Localdox" },
-      { property: "og:description", content: "Turn markdown files into a polished documentation experience." },
+      {
+        property: "og:description",
+        content: "Turn your files into a polished viewing experience.",
+      },
       { name: "theme-color", content: "#ffffff", media: "(prefers-color-scheme: light)" },
       { name: "theme-color", content: "#09090b", media: "(prefers-color-scheme: dark)" },
       { property: "og:image", content: "https://localdox.web.app/og-image.jpg" },

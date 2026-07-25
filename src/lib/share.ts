@@ -51,6 +51,6 @@ export async function decodeAndDecompress(encodedStr: string): Promise<string> {
   const decompressedBuffer = await response.arrayBuffer();
 
   const decoder = new TextDecoder();
-  
+
   return decoder.decode(decompressedBuffer);
 }

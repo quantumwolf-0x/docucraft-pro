@@ -25,6 +25,7 @@ export interface MdFile {
   kind?: DocumentKind;
   headings: MdHeading[];
   subtopics: MdChunk[];
+  isArchived?: boolean;
 }
 
 export type DocumentKind =
@@ -107,7 +108,7 @@ export function splitIntoSubtopics(content: string, fileName: string): MdChunk[]
   const lines = content.split("\n");
   const chunks: MdChunk[] = [];
   const slugger = new GithubSlugger();
-  
+
   let currentChunk: string[] = [];
   let currentId = "preamble";
   let currentTitle = stripExt(fileName);
@@ -119,41 +120,41 @@ export function splitIntoSubtopics(content: string, fileName: string): MdChunk[]
       currentChunk.push(line);
       continue;
     }
-    
+
     // Split on H1 only — each subtopic spans one top-level # heading up to the
     // next #, keeping all nested H2+ content inside that section.
     if (!inCode) {
       const m = /^(#)\s+(.+?)\s*#*\s*$/.exec(line);
       if (m) {
-        if (currentChunk.some(l => l.trim().length > 0)) {
+        if (currentChunk.some((l) => l.trim().length > 0)) {
           chunks.push({
             id: currentId,
             title: currentTitle,
-            content: currentChunk.join("\n")
+            content: currentChunk.join("\n"),
           });
         } else if (chunks.length > 0) {
-           chunks.push({
+          chunks.push({
             id: currentId,
             title: currentTitle,
-            content: ""
+            content: "",
           });
         }
-        
+
         currentChunk = [line];
         currentTitle = m[2].trim();
         currentId = slugger.slug(currentTitle || "section");
         continue;
       }
     }
-    
+
     currentChunk.push(line);
   }
-  
-  if (currentChunk.some(l => l.trim().length > 0) || chunks.length === 0) {
+
+  if (currentChunk.some((l) => l.trim().length > 0) || chunks.length === 0) {
     chunks.push({
       id: currentId,
       title: currentTitle,
-      content: currentChunk.join("\n")
+      content: currentChunk.join("\n"),
     });
   }
 

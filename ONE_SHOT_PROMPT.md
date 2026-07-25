@@ -2,7 +2,7 @@
 
 > Paste this entire document to an AI coding agent to reproduce the app end-to-end.
 > Build a **local-first, backend-free documentation reader & workspace** called
-> **DocuCraft Pro** (internal brand string: *Localdox*). Everything runs in the
+> **DocuCraft Pro** (internal brand string: _Localdox_). Everything runs in the
 > browser. No server, no login, no database on a backend — all data lives in the
 > user's own browser (IndexedDB + localStorage). Miss nothing below.
 
@@ -63,23 +63,36 @@ UI never touches the DB directly.
 
 ```ts
 interface PersistedFile {
-  id: string; name: string; content: string;
-  data?: string;          // data-URL of original bytes for binary files
-  mimeType?: string; size?: number; addedAt?: number;
+  id: string;
+  name: string;
+  content: string;
+  data?: string; // data-URL of original bytes for binary files
+  mimeType?: string;
+  size?: number;
+  addedAt?: number;
   kind?: DocumentKind;
 }
 interface WorkspaceRecord {
-  id: string; name: string; createdAt: number; updatedAt: number;
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
   files: PersistedFile[];
-  bookmarks: string[];              // "fileId#subtopicId" (or "fileId#root")
+  bookmarks: string[]; // "fileId#subtopicId" (or "fileId#root")
   highlights?: Highlight[];
-  ui: { activeFileId: string|null; expanded: Record<string,boolean>;
-        sidebarCollapsed: boolean; scrollTop: number; fileOrder?: string[]; };
+  ui: {
+    activeFileId: string | null;
+    expanded: Record<string, boolean>;
+    sidebarCollapsed: boolean;
+    scrollTop: number;
+    fileOrder?: string[];
+  };
 }
 type SaveStatus = "idle" | "saving" | "saved" | "restored";
 ```
 
 **Persistence behavior — implement all of it:**
+
 - **Autosave with debounce.** Every user mutation calls `markDirty()`: sets
   status `"saving"`, then writes to IndexedDB after a **700ms** pause. Show the
   save status in the UI.
@@ -103,6 +116,7 @@ formats route to rich previews; unknown binaries are preserved (stored as data
 URL) with a friendly "no previewer yet" message — never rejected.
 
 Implement **three upload paths**, all going through one `addFiles(File[])`:
+
 1. **Click** the Upload button / "Add more files" (hidden `<input type=file multiple>`).
 2. **Drag & drop anywhere on the window.** Global `dragover`/`drop` listeners.
    Show a full-screen **drop overlay** ("Drop files to upload", bouncing icon,
@@ -110,6 +124,7 @@ Implement **three upload paths**, all going through one `addFiles(File[])`:
 3. **Bottom-dock upload** on mobile.
 
 Upload rules & functionality:
+
 - **Empty files upload fine** (empty content string is valid — never block).
 - **Multi-file upload** with a live progress toast (`Uploading N files… 47%`),
   success/error toasts via `sonner`.
@@ -124,6 +139,7 @@ Upload rules & functionality:
   "My workspace" automatically.
 
 ### DocumentKind detection
+
 Map by extension first, then MIME sniffing. Kinds:
 `markdown | text | docx | pdf | spreadsheet | csv | json | presentation |
 google-doc | google-slide | image | video | audio | html | unknown`.
@@ -178,14 +194,15 @@ Rendered with react-markdown + the plugin chain above. Supports full **GFM**
 (`$…$`, `$$…$$`), and **syntax highlighting** with auto language detection.
 
 Custom renderers & features:
+
 - **Headings** get slug ids (github-slugger, matching the ToC/search exactly),
   a hover **"copy link to heading"** button (copies `…#slug`).
 - **Code blocks:** hover **Copy** button with copied-state check. Fenced
-  ```mermaid``` renders a live **Mermaid diagram**. Special fences
-  ```interactive-html``` / ```interactive-react``` render live sandboxed demos
+  `mermaid` renders a live **Mermaid diagram**. Special fences
+  `interactive-html` / `interactive-react` render live sandboxed demos
   (see §8).
 - **Callouts / admonitions:** GitHub-style `> [!NOTE|INFO|TIP|WARNING|CAUTION|
-  DANGER|IMPORTANT]` blockquotes render as colored, icon-labeled callout boxes.
+DANGER|IMPORTANT]` blockquotes render as colored, icon-labeled callout boxes.
 - **Rich media auto-embeds** — a paragraph that is a single bare link becomes an
   embed. Providers: **YouTube, Vimeo, Loom, CodeSandbox, StackBlitz, CodePen,
   GitHub Gist, Google Drive**. Direct video files (`.mp4/.webm/.mov/…`) render a
@@ -207,6 +224,7 @@ Custom renderers & features:
 - **Bookmark toggle** on the current section/chapter.
 
 ### Highlighting (annotation)
+
 - Select text → a **highlight popover** appears with: **5 color swatches**, an
   optional **label/tag** input, **Copy**, and **Highlight** (or, when editing an
   existing one, **Remove**). Also an **Ask AI** row (Ask/Summarize/Explain/
@@ -229,11 +247,13 @@ Let a markdown document **embed another workspace file inline** — including a
 **PPT deck rendered right inside the doc**, a PDF, an image, a spreadsheet, etc.
 
 Two ergonomic Markdown syntaxes, normalized to a reserved artifact URL:
+
 ```
 ![[Deck.pptx]]            → embeds Deck.pptx from the current workspace
 @[file](Report.pdf)       → same, alt form
 ![[Other Workspace/Deck.pptx]]  → resolve across workspaces by "Workspace/File"
 ```
+
 - A preprocessing pass (`prepareWorkspaceEmbeds`) rewrites these to a custom
   image URL prefix `https://workspace-artifact.local/…` that survives
   react-markdown's URL sanitizer but never hits the network (intercepted by the
@@ -249,7 +269,7 @@ Two ergonomic Markdown syntaxes, normalized to a reserved artifact URL:
 
 ## 8. Interactive live code blocks
 
-Fenced ```interactive-html``` and ```interactive-react``` blocks render **live,
+Fenced `interactive-html` and `interactive-react` blocks render **live,
 runnable, sandboxed** previews. Flags in the info string: `preview` (default
 render-only), `split` (source + preview, **resizable** panes), `playground`
 (editable source, live re-run).
@@ -346,10 +366,10 @@ with the user's own key.
   decides), or **Documents** (multi-select across the workspace). Shows "Context
   sent: …" scope label; token-aware trimming.
 - **Action catalog**, grouped:
-  - *Generate:* Notes, Summary, Key points, TL;DR, **Mermaid diagram**,
+  - _Generate:_ Notes, Summary, Key points, TL;DR, **Mermaid diagram**,
     Action items (checkbox list), Study notes (with self-test questions).
-  - *Explain:* Explain, Simplify, Answer a question (freeform input).
-  - *Rewrite:* Improve writing, Rewrite (style note), Expand, Shorten, Fix grammar.
+  - _Explain:_ Explain, Simplify, Answer a question (freeform input).
+  - _Rewrite:_ Improve writing, Rewrite (style note), Expand, Shorten, Fix grammar.
 - **Freeform ask** box (Enter to send, Shift+Enter newline).
 - Output actions: **Copy**, **Insert into doc**, **New document** (creates a
   markdown file from the answer, auto-named).

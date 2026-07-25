@@ -1,5 +1,20 @@
 import { useState, useEffect } from "react";
-import { Trash2, AlertTriangle, Bookmark, Folder, Database, ArrowRight, Palette, Check, ArrowLeft, ScrollText, Files, Sparkles } from "lucide-react";
+import {
+  Trash2,
+  AlertTriangle,
+  Star,
+  Folder,
+  Database,
+  ArrowRight,
+  Palette,
+  Check,
+  ArrowLeft,
+  ScrollText,
+  Files,
+  Sparkles,
+  Archive,
+  RefreshCw,
+} from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { AiSettings } from "./ai/AiSettings";
 import type { Highlight } from "@/lib/dom-highlighter";
@@ -28,6 +43,7 @@ export interface SettingsPageProps {
   onSetReadingMode: (mode: ReadingMode) => void;
   readingFont: ReadingFont;
   onSetReadingFont: (font: ReadingFont) => void;
+  onToggleArchiveFile: (id: string) => void;
 }
 
 export function SettingsPage({
@@ -51,22 +67,24 @@ export function SettingsPage({
   onSetReadingMode,
   readingFont,
   onSetReadingFont,
+  onToggleArchiveFile,
 }: SettingsPageProps) {
-  const [activeTab, setActiveTab] = useState<"appearance" | "ai" | "workspace" | "storage">(
-    "appearance",
-  );
+  const [activeTab, setActiveTab] = useState<
+    "appearance" | "ai" | "workspace" | "storage" | "archive"
+  >("appearance");
 
   const tabs = [
     { id: "appearance", label: "Appearance", icon: Palette },
     { id: "ai", label: "Ask AI", icon: Sparkles },
     { id: "workspace", label: "Workspace", icon: Folder },
+    { id: "archive", label: "Archive", icon: Archive },
     { id: "storage", label: "Storage", icon: Database },
   ] as const;
 
   return (
     <div className="mx-auto w-full max-w-4xl p-6 md:p-10">
       <div className="mb-8 flex items-center gap-4">
-        <Link 
+        <Link
           to="/"
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
           aria-label="Go back home"
@@ -75,7 +93,9 @@ export function SettingsPage({
         </Link>
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Settings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Manage your workspaces, data, and preferences.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage your workspaces, data, and preferences.
+          </p>
         </div>
       </div>
 
@@ -88,25 +108,22 @@ export function SettingsPage({
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-col items-center justify-center gap-1.5 rounded-lg p-2.5 transition-colors sm:min-w-[80px] ${
-                  active 
-                    ? "bg-primary/10 text-primary font-semibold" 
+                className={`flex flex-col items-center justify-center gap-1.5 rounded-lg p-2.5 transition-colors sm:min-w-20 ${
+                  active
+                    ? "bg-primary/10 text-primary font-semibold"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground font-medium"
                 }`}
                 title={tab.label}
                 aria-label={tab.label}
               >
                 <Icon className="h-5 w-5 shrink-0" />
-                <span className="text-[10px] leading-none tracking-wide">
-                  {tab.label}
-                </span>
+                <span className="text-xs leading-none tracking-wide">{tab.label}</span>
               </button>
             );
           })}
         </nav>
 
         <div className="min-w-0">
-
           {activeTab === "appearance" && (
             <AppearanceSettings
               theme={theme}
@@ -142,8 +159,9 @@ export function SettingsPage({
               />
             </div>
           )}
-          {activeTab === "storage" && (
-            <StorageSettings onClearStorage={onClearStorage} />
+          {activeTab === "storage" && <StorageSettings onClearStorage={onClearStorage} />}
+          {activeTab === "archive" && (
+            <ArchiveSettings files={files} onUnarchive={onToggleArchiveFile} />
           )}
         </div>
       </div>
@@ -162,26 +180,101 @@ const READER_THEME_META: {
   muted: string;
   accent: string;
 }[] = [
-  { id: "light", label: "Light", hint: "Bright, high contrast", bg: "#ffffff", fg: "#1c1c28", muted: "#6b7280", accent: "#2b2b40" },
-  { id: "sepia", label: "Sepia", hint: "Warm paper, easy on the eyes", bg: "#f4ecd8", fg: "#4a3f35", muted: "#8a7a68", accent: "#a8562f" },
-  { id: "dark", label: "Dark", hint: "Balanced slate for night reading", bg: "#0f1420", fg: "#eceef2", muted: "#9aa3b2", accent: "#e6e9ef" },
-  { id: "nord", label: "Nord", hint: "Cool blue-grey, low glare", bg: "#2e3440", fg: "#eceff4", muted: "#a9b3c4", accent: "#88c0d0" },
-  { id: "black", label: "Black", hint: "True black for OLED screens", bg: "#000000", fg: "#e8e8e8", muted: "#b3b3b3", accent: "#cfcfcf" },
+  {
+    id: "light",
+    label: "Light",
+    hint: "Bright, high contrast",
+    bg: "#ffffff",
+    fg: "#1c1c28",
+    muted: "#6b7280",
+    accent: "#2b2b40",
+  },
+  {
+    id: "sepia",
+    label: "Sepia",
+    hint: "Warm paper, easy on the eyes",
+    bg: "#f4ecd8",
+    fg: "#4a3f35",
+    muted: "#8a7a68",
+    accent: "#a8562f",
+  },
+  {
+    id: "dark",
+    label: "Dark",
+    hint: "Balanced slate for night reading",
+    bg: "#0f1420",
+    fg: "#eceef2",
+    muted: "#9aa3b2",
+    accent: "#e6e9ef",
+  },
+  {
+    id: "nord",
+    label: "Nord",
+    hint: "Cool blue-grey, low glare",
+    bg: "#2e3440",
+    fg: "#eceff4",
+    muted: "#a9b3c4",
+    accent: "#88c0d0",
+  },
+  {
+    id: "black",
+    label: "Black",
+    hint: "True black for OLED screens",
+    bg: "#000000",
+    fg: "#e8e8e8",
+    muted: "#b3b3b3",
+    accent: "#cfcfcf",
+  },
 ];
 
 // Explicit font stacks so each preview shows its own face regardless of the
 // currently applied reading font.
 const READING_FONT_META: { id: ReadingFont; label: string; hint: string; family: string }[] = [
-  { id: "system", label: "System", hint: "Your device's native font (default)", family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' },
-  { id: "serif", label: "Source Serif", hint: "Warm literary serif", family: '"Source Serif 4", ui-serif, Georgia, serif' },
-  { id: "newsreader", label: "Newsreader", hint: "Elegant editorial serif", family: '"Newsreader", ui-serif, Georgia, serif' },
-  { id: "sans", label: "Inter", hint: "Clean modern sans", family: '"Inter", ui-sans-serif, system-ui, sans-serif' },
-  { id: "hyperlegible", label: "Atkinson Hyperlegible", hint: "Maximum legibility", family: '"Atkinson Hyperlegible", ui-sans-serif, sans-serif' },
+  {
+    id: "system",
+    label: "System",
+    hint: "Your device's native font (default)",
+    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  },
+  {
+    id: "serif",
+    label: "Source Serif",
+    hint: "Warm literary serif",
+    family: '"Source Serif 4", ui-serif, Georgia, serif',
+  },
+  {
+    id: "newsreader",
+    label: "Newsreader",
+    hint: "Elegant editorial serif",
+    family: '"Newsreader", ui-serif, Georgia, serif',
+  },
+  {
+    id: "sans",
+    label: "Inter",
+    hint: "Clean modern sans",
+    family: '"Inter", ui-sans-serif, system-ui, sans-serif',
+  },
+  {
+    id: "hyperlegible",
+    label: "Atkinson Hyperlegible",
+    hint: "Maximum legibility",
+    family: '"Atkinson Hyperlegible", ui-sans-serif, sans-serif',
+  },
 ];
 
 const READING_MODE_META: { id: ReadingMode; label: string; hint: string; icon: typeof Files }[] = [
-  { id: "paginated", label: "Paged sections", hint: "One section per page, with prev / next", icon: Files },
-  { id: "single", label: "Single page", hint: "The whole document on one scroll", icon: ScrollText },
+  {
+    id: "paginated",
+    label: "Paged sections",
+    hint: "One section per page, with prev / next",
+    icon: Files,
+  },
+  {
+    id: "single",
+    label: "Single page",
+    hint: "The whole document on one scroll",
+    icon: ScrollText,
+  },
 ];
 
 function AppearanceSettings({
@@ -205,8 +298,8 @@ function AppearanceSettings({
         <div>
           <h2 className="text-lg font-semibold">Reader theme</h2>
           <p className="text-sm text-muted-foreground">
-            Choose the background that&apos;s most comfortable for extended reading. Text, links, tables,
-            borders and selection all adapt automatically with WCAG-compliant contrast.
+            Choose the background that&apos;s most comfortable for extended reading. Text, links,
+            tables, borders and selection all adapt automatically with WCAG-compliant contrast.
           </p>
         </div>
 
@@ -224,15 +317,24 @@ function AppearanceSettings({
               >
                 {/* Mini reading preview rendered in the theme's own colors. */}
                 <div className="p-4" style={{ backgroundColor: t.bg, color: t.fg }}>
-                  <div className="text-sm font-semibold" style={{ fontFamily: "var(--font-heading)" }}>
+                  <div
+                    className="text-sm font-semibold"
+                    style={{ fontFamily: "var(--font-heading)" }}
+                  >
                     Aa — Reading
                   </div>
-                  <div className="mt-1 text-xs leading-snug" style={{ fontFamily: "var(--font-body)" }}>
+                  <div
+                    className="mt-1 text-xs leading-snug"
+                    style={{ fontFamily: "var(--font-body)" }}
+                  >
                     The quick brown fox jumps over the lazy dog.
                   </div>
                   <div className="mt-2 flex items-center gap-1.5">
-                    <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: t.accent }} />
-                    <span className="text-[11px]" style={{ color: t.muted }}>
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: t.accent }}
+                    />
+                    <span className="text-xs" style={{ color: t.muted }}>
                       link · secondary
                     </span>
                   </div>
@@ -240,7 +342,7 @@ function AppearanceSettings({
                 <div className="flex items-center justify-between border-t border-border bg-card px-3 py-2">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium text-foreground">{t.label}</div>
-                    <div className="truncate text-[11px] text-muted-foreground">{t.hint}</div>
+                    <div className="truncate text-xs text-muted-foreground">{t.hint}</div>
                   </div>
                   {active && (
                     <span className="ml-2 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
@@ -275,11 +377,14 @@ function AppearanceSettings({
                 }`}
               >
                 <div className="min-w-0">
-                  <div className="truncate text-2xl leading-tight text-foreground" style={{ fontFamily: f.family }}>
+                  <div
+                    className="truncate text-2xl leading-tight text-foreground"
+                    style={{ fontFamily: f.family }}
+                  >
                     Ag
                   </div>
                   <div className="mt-1 text-sm font-medium text-foreground">{f.label}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{f.hint}</div>
+                  <div className="truncate text-xs text-muted-foreground">{f.hint}</div>
                 </div>
                 {active && (
                   <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
@@ -314,12 +419,14 @@ function AppearanceSettings({
                   active ? "border-primary ring-2 ring-primary/40" : "border-border"
                 }`}
               >
-                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${active ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                <div
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${active ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}
+                >
                   <Icon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-foreground">{m.label}</div>
-                  <div className="text-[11px] text-muted-foreground">{m.hint}</div>
+                  <div className="text-xs text-muted-foreground">{m.hint}</div>
                 </div>
                 {active && (
                   <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
@@ -382,7 +489,10 @@ function WorkspaceItemRow({ workspace, isCurrent, onRename, onDelete, onOpen, ca
         <div className="flex items-center gap-3">
           <Folder className="h-5 w-5 text-primary" />
           <h3 className="font-semibold text-foreground">
-            {workspace.name} {isCurrent && <span className="ml-2 text-xs font-normal text-muted-foreground">(Current)</span>}
+            {workspace.name}{" "}
+            {isCurrent && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">(Current)</span>
+            )}
           </h3>
         </div>
         <div className="flex items-center gap-2">
@@ -402,13 +512,19 @@ function WorkspaceItemRow({ workspace, isCurrent, onRename, onDelete, onOpen, ca
             }}
             disabled={isCurrent || !canDelete}
             className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30 transition-colors"
-            title={isCurrent ? "Cannot delete the active workspace" : (!canDelete ? "Cannot delete your only workspace" : "Delete workspace")}
+            title={
+              isCurrent
+                ? "Cannot delete the active workspace"
+                : !canDelete
+                  ? "Cannot delete your only workspace"
+                  : "Delete workspace"
+            }
           >
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
       </div>
-      
+
       <div className="flex gap-3">
         <input
           value={renameValue}
@@ -457,7 +573,8 @@ function StorageSettings({ onClearStorage }: { onClearStorage: () => void }) {
         <p className="mt-1 text-sm text-muted-foreground">
           {usage !== null && quota !== null ? (
             <>
-              Using <strong className="text-foreground">{formatBytes(usage)}</strong> of available <strong className="text-foreground">{formatBytes(quota/20)}</strong>
+              Using <strong className="text-foreground">{formatBytes(usage)}</strong> of available{" "}
+              <strong className="text-foreground">{formatBytes(quota / 20)}</strong>
             </>
           ) : (
             "Calculating..."
@@ -473,11 +590,16 @@ function StorageSettings({ onClearStorage }: { onClearStorage: () => void }) {
           <div>
             <h3 className="text-sm font-medium text-destructive">Clear All Storage</h3>
             <p className="mt-1 text-sm text-destructive/80">
-              This will permanently delete all workspaces, files, highlights, bookmarks, and preferences from this browser. This action cannot be undone.
+              This will permanently delete all workspaces, files, highlights, bookmarks, and
+              preferences from this browser. This action cannot be undone.
             </p>
             <button
               onClick={() => {
-                if (window.confirm("Are you absolutely sure you want to clear ALL data on this device?")) {
+                if (
+                  window.confirm(
+                    "Are you absolutely sure you want to clear ALL data on this device?",
+                  )
+                ) {
                   onClearStorage();
                 }
               }}
@@ -530,13 +652,16 @@ function BookmarkSettings({
       ) : (
         <div className="divide-y divide-border rounded-xl border border-border bg-card shadow-sm">
           {bookmarks.map((b) => (
-            <div key={`${b.fileId}-${b.subtopicId}`} className="flex items-center justify-between p-4 transition-colors hover:bg-accent/50">
+            <div
+              key={`${b.fileId}-${b.subtopicId}`}
+              className="flex items-center justify-between p-4 transition-colors hover:bg-accent/50"
+            >
               <button
                 onClick={() => onNavigate(b.fileId, b.subtopicId)}
                 className="flex items-center gap-3 text-left"
               >
                 <div className="rounded bg-primary/10 p-1.5 text-primary">
-                  <Bookmark className="h-4 w-4" />
+                  <Star className="h-4 w-4 fill-gold text-gold" />
                 </div>
                 <span className="text-sm font-medium text-foreground hover:text-primary transition-colors">
                   {b.name}
@@ -596,7 +721,7 @@ function HighlightSettings({
       ) : (
         <div className="divide-y divide-border rounded-xl border border-border bg-card shadow-sm">
           {highlights.map((h) => {
-            const file = files.find(f => f.id === h.fileId);
+            const file = files.find((f) => f.id === h.fileId);
             return (
               <div key={h.id} className="group p-4 transition-colors hover:bg-accent/50">
                 <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
@@ -642,3 +767,61 @@ function HighlightSettings({
   );
 }
 
+function ArchiveSettings({
+  files,
+  onUnarchive,
+}: {
+  files: MdFile[];
+  onUnarchive: (id: string) => void;
+}) {
+  const archivedFiles = files.filter((f) => f.isArchived);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-foreground">Archived Files</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Files that have been archived are hidden from the sidebar but can still be unarchived or
+          used as embedded resources.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        {archivedFiles.length === 0 ? (
+          <div className="rounded-xl border border-border bg-card p-8 text-center shadow-sm">
+            <Archive className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
+            <h3 className="font-semibold text-foreground">No archived files</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Files you archive will appear here.
+            </p>
+          </div>
+        ) : (
+          archivedFiles.map((file) => (
+            <div
+              key={file.id}
+              className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-sm"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+                  <Archive className="h-5 w-5 text-primary" strokeWidth={1.5} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="truncate font-semibold text-foreground">{file.name}</h3>
+                  <p className="truncate text-xs text-muted-foreground">Archived Document</p>
+                </div>
+              </div>
+              <button
+                onClick={() => onUnarchive(file.id)}
+                className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary active:scale-95"
+                title="Unarchive file"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Unarchive
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}

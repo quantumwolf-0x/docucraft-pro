@@ -18,7 +18,6 @@ import {
   Clock,
   Pencil,
   Eye,
-  Bookmark,
   Info,
   AlertTriangle,
   Lightbulb,
@@ -64,6 +63,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ViewerHeader, HeaderTitle } from "./ViewerHeader";
 
 interface Props {
   file: MdFile;
@@ -138,8 +138,7 @@ export function MarkdownViewer({
   const chunkForHeading = useMemo(() => headingChunkMap(file.content), [file.content]);
 
   const activeChunk = useMemo(() => {
-    const targetId =
-      (activeSubtopicId && chunkForHeading[activeSubtopicId]) || activeSubtopicId;
+    const targetId = (activeSubtopicId && chunkForHeading[activeSubtopicId]) || activeSubtopicId;
     return (
       allChunks.find((s) => s.id === targetId) ||
       allChunks[0] || { id: "preamble", title: stripExt(file.name), content: file.content }
@@ -153,7 +152,23 @@ export function MarkdownViewer({
     chunkIndex >= 0 && chunkIndex < allChunks.length - 1 ? allChunks[chunkIndex + 1] : null;
 
   const renderContent = useMemo(() => {
-    return prepareWorkspaceEmbeds(activeChunk.content.replace(/^\s*(#{1,6})\s+[^\n]+(\n|$)/, ""));
+    let content = activeChunk.content.replace(/^\s*(#{1,6})\s+[^\n]+(\n|$)/, "");
+
+    // Strip leading horizontal rules (often left over when users separate sections with ---)
+    while (true) {
+      const next = content.replace(/^\s*(?:[-*_][ \t]*){3,}(?:\r?\n|$)/, "");
+      if (next === content) break;
+      content = next;
+    }
+
+    // Strip trailing horizontal rules
+    while (true) {
+      const next = content.replace(/(?:\r?\n|^)\s*(?:[-*_][ \t]*){3,}\s*$/, "");
+      if (next === content) break;
+      content = next;
+    }
+
+    return prepareWorkspaceEmbeds(content);
   }, [activeChunk.content]);
 
   // Single-page mode renders the whole document at once. Content is left intact
@@ -488,99 +503,111 @@ export function MarkdownViewer({
     ],
   );
 
-
   return (
     <>
       {/* Sticky Top Navigation Bar matching Nav.png */}
-      {!singleMode && (
-        <div className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b border-border/50 bg-background/80 px-4 backdrop-blur-md">
-          <div className="flex items-center gap-2">
-          {!singleMode && allChunks.length > 1 && (
-            <div className="flex items-center gap-1 mr-2">
-              <button 
-                onClick={() => prevChunk && onNav(file.id, prevChunk.id)}
-                disabled={!prevChunk}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <button 
-                onClick={() => nextChunk && onNav(file.id, nextChunk.id)}
-                disabled={!nextChunk}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
-          )}
-          
-          <Select
-            value={activeChunk.id}
-            onValueChange={(val) => onNav(file.id, val)}
-          >
-            <SelectTrigger className="w-fit h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
-              <BookOpen className="h-4 w-4 text-muted-foreground" />
-              <span className="truncate max-w-[150px] sm:max-w-[300px] text-left">
-                {stripExt(file.name)}
-              </span>
-            </SelectTrigger>
-            {!singleMode && allChunks.length > 1 && (
+      <ViewerHeader
+        nav={{
+          onPrev: () =>
+            singleMode
+              ? prevFile && onNav(prevFile.id, null)
+              : prevChunk && onNav(file.id, prevChunk.id),
+          onNext: () =>
+            singleMode
+              ? nextFile && onNav(nextFile.id, null)
+              : nextChunk && onNav(file.id, nextChunk.id),
+          prevDisabled: singleMode ? !prevFile : !prevChunk,
+          nextDisabled: singleMode ? !nextFile : !nextChunk,
+          prevLabel: singleMode ? "Previous file" : "Previous section",
+          nextLabel: singleMode ? "Next file" : "Next section",
+        }}
+        center={
+          singleMode || allChunks.length <= 1 ? (
+            <HeaderTitle icon={<BookOpen className="h-4 w-4" />} title={stripExt(file.name)} />
+          ) : (
+            <Select value={activeChunk.id} onValueChange={(val) => onNav(file.id, val)}>
+              <SelectTrigger className="w-fit h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
+                <BookOpen className="h-4 w-4 text-muted-foreground" />
+                <span className="truncate max-w-40 sm:max-w-xs text-left">
+                  {stripExt(file.name)}
+                </span>
+              </SelectTrigger>
               <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
-                <div className="px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
+                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
                   Sections
                 </div>
-                <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                  {allChunks.map((chunk) => (
-                    <SelectItem key={chunk.id} value={chunk.id} className="cursor-pointer pl-2">
-                      {chunk.title.length > 20 ? chunk.title.substring(0, 20) + "..." : chunk.title}
-                    </SelectItem>
-                  ))}
+                <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
+                  {allChunks.map((chunk) => {
+                    const words = chunk.content.trim().split(/\s+/).filter(Boolean).length;
+                    const readingMin = Math.max(1, Math.round(words / 220));
+                    return (
+                      <SelectItem
+                        key={chunk.id}
+                        value={chunk.id}
+                        className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
+                      >
+                        <div className="flex w-full items-center justify-between gap-4">
+                          <span className="truncate">
+                            {chunk.title.length > 20
+                              ? chunk.title.substring(0, 20) + "..."
+                              : chunk.title}
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {readingMin} min
+                          </span>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
                 </div>
               </SelectContent>
-            )}
-          </Select>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          {!singleMode && (
+            </Select>
+          )
+        }
+        actions={
+          <>
             <button
+              type="button"
               onClick={onToggleBookmark}
-              aria-label={isBookmarked ? "Remove bookmark" : "Bookmark"}
+              aria-label={isBookmarked ? "Unstar" : "Star"}
               className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              <Star className={`h-4 w-4 ${isBookmarked ? "fill-foreground text-foreground" : ""}`} />
+              <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
             </button>
-          )}
-          {!editMode && onToggleReadingMode && (
-            <button
-              onClick={onToggleReadingMode}
-              title={singleMode ? "Paged: read one section at a time" : "Single page: read the whole document"}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Files className="h-4 w-4" />
-            </button>
-          )}
-          {!editMode && (
-            <button
-              onClick={() => setEditMode(true)}
-              title="Edit document"
-              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Pencil className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </div>
-      )}
+            {!editMode && onToggleReadingMode && (
+              <button
+                onClick={onToggleReadingMode}
+                title={
+                  singleMode
+                    ? "Paged: read one section at a time"
+                    : "Single page: read the whole document"
+                }
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Files className="h-4 w-4" />
+              </button>
+            )}
+            {!editMode && (
+              <button
+                onClick={() => setEditMode(true)}
+                title="Edit document"
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Pencil className="h-4 w-4" />
+              </button>
+            )}
+          </>
+        }
+      />
       {menu && !editMode && (
         <div
           ref={menuRef}
-          className="fixed z-[60] w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
+          className="fixed z-(--z-dropdown) w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
           style={{ top: Math.max(56, menu.y - 12), left: menu.x }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="mb-2 flex items-center justify-between px-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               {menu.mode === "create" ? "Highlight" : "Edit highlight"}
             </span>
             <button
@@ -594,7 +621,7 @@ export function MarkdownViewer({
 
           {menu.mode === "create" && onAskAi && (
             <div className="mb-2 border-b border-border pb-2">
-              <div className="mb-1.5 flex items-center gap-1 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="mb-1.5 flex items-center gap-1 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 <Sparkles className="h-3 w-3" /> Ask AI
               </div>
               <div className="flex flex-wrap gap-1 px-1">
@@ -613,7 +640,7 @@ export function MarkdownViewer({
                       window.getSelection()?.removeAllRanges();
                       setMenu(null);
                     }}
-                    className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                    className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
                   >
                     {item.label}
                   </button>
@@ -736,48 +763,27 @@ export function MarkdownViewer({
           onMouseUp={openCreateMenu}
           className="docs-prose mx-auto min-w-0 flex-1"
         >
-          <div className="mb-8">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words mb-1">
-                  {singleMode ? stripExt(file.name) : activeChunk.title}
-                </h1>
-                <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
-                </span>
-              </div>
-              
-              {singleMode && (
-                <div className="mt-1.5 flex shrink-0 items-center gap-2">
-                  {!editMode && onToggleReadingMode && (
-                    <button
-                      onClick={onToggleReadingMode}
-                      title="Paged: read one section at a time"
-                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
-                    >
-                      <Files className="h-3.5 w-3.5" /> Paged
-                    </button>
-                  )}
-                  {!editMode && (
-                    <button
-                      onClick={() => setEditMode(true)}
-                      title="Edit document"
-                      className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+          {!singleMode && (
+            <div className="mb-8">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl wrap-break-word mb-1">
+                    {activeChunk.title}
+                  </h1>
+                  <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
+                  </span>
                 </div>
-              )}
+              </div>
             </div>
-          </div>
+          )}
 
           {editMode ? (
             <div>
               {/* Sticky exit bar: leaving edit mode stays reachable no matter how
                   far the reader scrolls. Single-pane editor keeps typing smooth —
                   no live full-document re-render on every keystroke. */}
-              <div className="sticky top-16 z-30 -mx-1 mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/90 px-3 py-2 backdrop-blur">
+              <div className="sticky top-16 z-(--z-sticky) -mx-1 mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/90 px-3 py-2 backdrop-blur">
                 <span className="truncate text-xs font-medium text-muted-foreground">
                   Editing — changes save automatically
                 </span>
@@ -792,7 +798,7 @@ export function MarkdownViewer({
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
-                className="min-h-[70vh] w-full resize-y rounded-lg border border-border bg-muted/30 p-4 font-mono text-[13px] leading-relaxed outline-none focus:border-primary/50"
+                className="min-h-[70vh] w-full resize-y rounded-lg border border-border bg-muted/30 p-4 font-mono text-sm leading-relaxed outline-none focus:border-primary/50"
               />
             </div>
           ) : (
@@ -939,7 +945,10 @@ function CodeBlock({ children, ...rest }: any) {
   const encodedLang = /language-([\w+-]+)/.exec(cls)?.[1];
   const [lang, encodedMeta] = encodedLang?.split("--") ?? [];
   const meta =
-    codeEl?.props?.node?.data?.meta ?? codeEl?.props?.node?.meta ?? encodedMeta?.replaceAll("-", " ") ?? "";
+    codeEl?.props?.node?.data?.meta ??
+    codeEl?.props?.node?.meta ??
+    encodedMeta?.replaceAll("-", " ") ??
+    "";
 
   if (lang === "interactive-html" || lang === "interactive-react") {
     return (
@@ -954,7 +963,7 @@ function CodeBlock({ children, ...rest }: any) {
   return (
     <div className="group relative my-6">
       {/* {lang && (
-        <div className="absolute left-3 top-2 z-10 rounded bg-background/60 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground backdrop-blur">
+        <div className="absolute left-3 top-2 z-10 rounded bg-background/60 px-1.5 py-0.5 text-xs font-mono uppercase tracking-wider text-muted-foreground backdrop-blur">
           {lang}
         </div>
       )} */}
