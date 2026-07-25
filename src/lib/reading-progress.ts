@@ -6,7 +6,7 @@ export interface ChapterProgress {
 
 export type ProgressMap = Record<string, ChapterProgress>;
 
-const KEY = "docucraft:reading:v1";
+const KEY = "localdox:reading:v1";
 
 function load(): ProgressMap {
   if (typeof localStorage === "undefined") return {};

@@ -1,0 +1,113 @@
+import { useEffect } from "react";
+import { Highlighter, X, Trash2, Tag } from "lucide-react";
+import type { Highlight } from "@/lib/dom-highlighter";
+
+/**
+ * "Show highlights only": pulls every highlight for a single text document out
+ * of the prose and lists them in isolation, so the reader can skim just the
+ * parts they marked. Reached from the file three-dots menu; only offered for
+ * text-based files, the only ones the reader can highlight.
+ */
+export function HighlightsOnlyModal({
+  fileName,
+  highlights,
+  onClose,
+  onJump,
+  onRemove,
+}: {
+  fileName: string;
+  highlights: Highlight[];
+  onClose: () => void;
+  onJump: (hl: Highlight) => void;
+  onRemove: (id: string) => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const title = fileName.replace(/\.[^.]+$/, "");
+
+  return (
+    <div
+      className="fixed inset-0 z-[110] flex items-start justify-center bg-background/70 p-4 backdrop-blur-sm sm:p-8"
+      onMouseDown={onClose}
+    >
+      <div
+        className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Highlighter className="h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-foreground">{title}</h2>
+              <p className="text-[11px] text-muted-foreground">
+                {highlights.length} highlight{highlights.length === 1 ? "" : "s"}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {highlights.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-14 text-center">
+              <Highlighter className="h-6 w-6 text-muted-foreground/60" />
+              <p className="text-sm text-muted-foreground">No highlights in this document yet.</p>
+              <p className="text-[12px] text-muted-foreground/70">
+                Select text while reading to highlight it.
+              </p>
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {highlights.map((hl) => (
+                <li key={hl.id}>
+                  <div className="group flex items-stretch gap-3 rounded-lg border border-border bg-background p-3 transition-colors hover:border-primary/40">
+                    <span
+                      className="w-1 shrink-0 rounded-full"
+                      style={{ backgroundColor: hl.color }}
+                      aria-hidden
+                    />
+                    <button
+                      onClick={() => onJump(hl)}
+                      className="min-w-0 flex-1 text-left"
+                      title="Jump to this highlight"
+                    >
+                      <span
+                        className="text-[13px] leading-relaxed text-foreground [box-decoration-break:clone]"
+                        style={{ backgroundColor: hl.color, color: "#0a0a0a", padding: "1px 2px" }}
+                      >
+                        {hl.text}
+                      </span>
+                      {hl.label && (
+                        <span className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <Tag className="h-3 w-3 shrink-0" />
+                          {hl.label}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => onRemove(hl.id)}
+                      aria-label="Remove highlight"
+                      className="shrink-0 self-start rounded-md p-1.5 text-muted-foreground opacity-100 transition-colors hover:text-destructive md:opacity-0 md:group-hover:opacity-100"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

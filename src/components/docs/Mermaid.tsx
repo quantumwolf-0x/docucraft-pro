@@ -162,19 +162,21 @@ export function Mermaid({ code }: { code: string }) {
           // would otherwise become the containing block for this fixed overlay,
           // trapping it inside the article box instead of the viewport.
           <div className="fixed inset-0 z-[70] flex flex-col bg-background">
-          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-            <span className="text-sm font-medium text-muted-foreground">
-              Diagram — zoom with the +/− buttons, drag to move
-            </span>
+            {/* Fixed, top-most Close so it stays reachable through any zoom/pan on
+                any viewport — sits above the overlay and the stage's zoom controls. */}
             <button
               onClick={() => setFullscreen(false)}
               aria-label="Close fullscreen"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground active:scale-95"
+              className="fixed right-3 top-3 z-[80] inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background/90 px-3 text-sm font-medium text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground active:scale-95"
             >
               <X className="h-4 w-4" />
               Close
             </button>
-          </div>
+            <div className="border-b border-border px-4 py-2.5 pr-28">
+              <span className="text-sm font-medium text-muted-foreground">
+                Diagram — zoom with the +/− buttons, drag to move
+              </span>
+            </div>
             <div className="min-h-0 flex-1">
               <Stage svg={svg} fill extraControls={downloadBtn} />
             </div>
@@ -237,8 +239,10 @@ function Stage({
   return (
     <div className="group/stage relative flex h-full w-full flex-col">
       <div
-        className={`absolute right-2 top-2 z-10 flex items-center gap-1 transition-opacity ${
-          fill ? "opacity-100" : "opacity-0 group-hover/stage:opacity-100"
+        className={`absolute top-2 z-10 flex items-center gap-1 transition-opacity ${
+          // In fullscreen the fixed Close owns the top-right corner, so keep the
+          // zoom controls on the left to avoid overlap.
+          fill ? "left-2 opacity-100" : "right-2 opacity-0 group-hover/stage:opacity-100"
         }`}
       >
         <IconBtn onClick={zoomIn} label="Zoom in">

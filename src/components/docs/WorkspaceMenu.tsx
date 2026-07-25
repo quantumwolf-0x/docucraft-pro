@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Plus, Download, Upload, Trash2, Check, FolderOpen, CheckCircle2 } from "lucide-react";
+import { ChevronDown, Plus, Download, Upload, Trash2, Check, FolderOpen, Share } from "lucide-react";
 
 interface WorkspaceLite {
   id: string;
@@ -10,11 +10,11 @@ interface Props {
   workspaces: WorkspaceLite[];
   currentId: string | null;
   onSwitch: (id: string) => void;
-  onNew: (name?: string) => void;
+  onNew: (name: string) => void;
+  onDelete: (id: string) => void;
   onImport: (file: File) => void;
   onExport: () => void;
-  onDelete: (id: string) => void;
-  onRename: (id: string, newName: string) => void;
+  onShare: () => void;
 }
 
 export function WorkspaceMenu({
@@ -22,23 +22,19 @@ export function WorkspaceMenu({
   currentId,
   onSwitch,
   onNew,
+  onDelete,
   onImport,
   onExport,
-  onDelete,
-  onRename,
+  onShare,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) {
-      setIsCreating(false);
-      setNewName("");
-      return;
-    }
+    if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
@@ -51,7 +47,24 @@ export function WorkspaceMenu({
     };
   }, [open]);
 
+  // Reset the inline create field whenever the menu closes.
+  useEffect(() => {
+    if (!open) {
+      setCreating(false);
+      setNewName("");
+    }
+  }, [open]);
+
   const current = workspaces.find((w) => w.id === currentId);
+
+  const handleCreate = () => {
+    const name = newName.trim();
+    if (!name) return;
+    onNew(name);
+    setCreating(false);
+    setNewName("");
+    setOpen(false);
+  };
 
   return (
     <div ref={rootRef} className="relative">
@@ -86,92 +99,80 @@ export function WorkspaceMenu({
                   <span className="truncate">{w.name}</span>
                 </button>
                 {workspaces.length > 1 && (
-                  <div className="mr-1 flex items-center opacity-0 transition-opacity group-hover:opacity-100">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete(w.id);
-                      }}
-                      className="rounded p-1"
-                      aria-label={`Delete ${w.name}`}
-                      title="Delete workspace"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-                    </button>
-                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(w.id);
+                    }}
+                    className="mr-1 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-label={`Delete ${w.name}`}
+                    title="Delete workspace"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+                  </button>
                 )}
               </div>
             ))}
+          </div>
 
-            {isCreating && (
-              <div className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md bg-accent/50">
-                <Check className="h-3.5 w-3.5 shrink-0 opacity-0" />
+          {creating && (
+            <div className="border-t border-border p-2">
+              <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1">
                 <input
                   autoFocus
+                  type="text"
+                  placeholder="Workspace name..."
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      onNew(newName.trim() || undefined);
-                      setIsCreating(false);
-                      setNewName("");
-                      setOpen(false);
-                    } else if (e.key === "Escape") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setIsCreating(false);
+                    if (e.key === "Enter") handleCreate();
+                    if (e.key === "Escape") {
+                      setCreating(false);
                       setNewName("");
                     }
                   }}
-                  placeholder="Workspace name..."
-                  className="flex-1 min-w-0 bg-transparent outline-none text-sm placeholder:text-muted-foreground/60"
+                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                 />
                 <button
-                  onClick={() => {
-                    onNew(newName.trim() || undefined);
-                    setIsCreating(false);
-                    setNewName("");
-                    setOpen(false);
-                  }}
-                  className="flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                  onClick={handleCreate}
+                  disabled={!newName.trim()}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <Check className="h-3.5 w-3.5" />
                   Save
                 </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          <div className="flex gap-1 border-t border-border p-1">
-            {!isCreating && (
-              <button
+          <div className="grid grid-cols-4 gap-1 border-t border-border p-1">
+            {!creating && (
+              <ActionButton
+                icon={Plus}
+                label="New"
                 onClick={() => {
-                  setIsCreating(true);
+                  setCreating(true);
+                  setNewName("");
                 }}
-                className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <Plus className="h-4 w-4" />
-                <span>New</span>
-              </button>
+              />
             )}
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Upload className="h-4 w-4" />
-              <span>Import</span>
-            </button>
-            <button
+            <ActionButton icon={Upload} label="Import" onClick={() => fileRef.current?.click()} />
+            <ActionButton
+              icon={Download}
+              label="Export"
               onClick={() => {
                 onExport();
                 setOpen(false);
               }}
-              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Download className="h-4 w-4" />
-              <span>Export</span>
-            </button>
+            />
+            <ActionButton
+              icon={Share}
+              label="Share"
+              onClick={() => {
+                onShare();
+                setOpen(false);
+              }}
+            />
           </div>
         </div>
       )}
@@ -183,11 +184,33 @@ export function WorkspaceMenu({
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) onImport(f);
+          if (f) {
+            onImport(f);
+            setOpen(false);
+          }
           e.target.value = "";
-          setOpen(false);
         }}
       />
     </div>
+  );
+}
+
+function ActionButton({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: typeof Plus;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex flex-col items-center gap-1 rounded-md px-1 py-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
   );
 }

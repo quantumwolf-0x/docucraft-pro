@@ -27,15 +27,31 @@ import {
   Tag,
   Trash2,
   X,
+  ScrollText,
+  Files,
+  Sparkles,
 } from "lucide-react";
 import type { MdFile } from "@/lib/markdown-utils";
+import type { ReadingMode } from "@/lib/persistence";
 import { slugify } from "@/lib/markdown-utils";
 import { Mermaid } from "./Mermaid";
 import { detectEmbed, EmbedFrame, isVideoUrl, VideoPlayer } from "@/lib/media-embeds";
 import { Lightbox } from "./Lightbox";
 import { HL_COLORS, hlGroup, type Highlight } from "@/lib/dom-highlighter";
-import { getSelectionOffsets, buildRange, offsetFromPoint, firstTextRange } from "@/lib/text-offsets";
+import {
+  getSelectionOffsets,
+  buildRange,
+  offsetFromPoint,
+  firstTextRange,
+} from "@/lib/text-offsets";
 import { splitIntoSubtopics } from "@/lib/markdown-utils";
+import { InlineArtifact } from "./InlineArtifact";
+import { InteractiveBlock } from "./InteractiveBlock";
+import {
+  artifactReference,
+  isArtifactUrl,
+  prepareWorkspaceEmbeds,
+} from "@/lib/workspace-artifacts";
 
 interface Props {
   file: MdFile;
@@ -53,6 +69,16 @@ interface Props {
   onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
   onRemoveHighlight: (id: string) => void;
   onHome?: () => void;
+  workspaceId?: string | null;
+  workspaceRevision?: string;
+  workspaceFiles?: MdFile[];
+  workspaceName?: string;
+  onOpenArtifact?: (fileId: string, workspaceId: string) => void;
+  onRemoveFile?: () => void;
+  readingMode?: ReadingMode;
+  onToggleReadingMode?: () => void;
+  /** Open the Ask AI panel prefilled from the current selection. */
+  onAskAi?: (prefill: { selection: string; actionId?: string }) => void;
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
@@ -73,27 +99,50 @@ export function MarkdownViewer({
   onUpdateHighlight,
   onRemoveHighlight,
   onHome,
+  workspaceId,
+  workspaceRevision,
+  workspaceFiles,
+  workspaceName,
+  onOpenArtifact,
+  onRemoveFile,
+  readingMode = "paginated",
+  onToggleReadingMode,
+  onAskAi,
 }: Props) {
+  const singleMode = readingMode === "single";
   const containerRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState(0);
   const [showTop, setShowTop] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState(file.content);
-  
-  const allChunks = useMemo(() => file.subtopics || splitIntoSubtopics(file.content, file.name), [file.subtopics, file.content, file.name]);
-  
+
+  const allChunks = useMemo(
+    () => file.subtopics || splitIntoSubtopics(file.content, file.name),
+    [file.subtopics, file.content, file.name],
+  );
+
   const activeChunk = useMemo(() => {
-    return allChunks.find(s => s.id === activeSubtopicId) || allChunks[0] || { id: 'preamble', title: stripExt(file.name), content: file.content };
+    return (
+      allChunks.find((s) => s.id === activeSubtopicId) ||
+      allChunks[0] || { id: "preamble", title: stripExt(file.name), content: file.content }
+    );
   }, [allChunks, activeSubtopicId, file.content, file.name]);
 
-  const chunkIndex = allChunks.findIndex(s => s.id === activeChunk.id);
+  const chunkIndex = allChunks.findIndex((s) => s.id === activeChunk.id);
   const isLastChunk = chunkIndex === allChunks.length - 1;
   const prevChunk = chunkIndex > 0 ? allChunks[chunkIndex - 1] : null;
-  const nextChunk = chunkIndex >= 0 && chunkIndex < allChunks.length - 1 ? allChunks[chunkIndex + 1] : null;
+  const nextChunk =
+    chunkIndex >= 0 && chunkIndex < allChunks.length - 1 ? allChunks[chunkIndex + 1] : null;
 
   const renderContent = useMemo(() => {
-    return activeChunk.content.replace(/^\s*(#{1,6})\s+[^\n]+(\n|$)/, "");
+    return prepareWorkspaceEmbeds(activeChunk.content.replace(/^\s*(#{1,6})\s+[^\n]+(\n|$)/, ""));
   }, [activeChunk.content]);
+
+  // Single-page mode renders the whole document at once. Content is left intact
+  // so every heading keeps its anchor id for in-page section navigation.
+  const fullRender = useMemo(() => {
+    return prepareWorkspaceEmbeds(file.content);
+  }, [file.content]);
 
   const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
 
@@ -102,12 +151,22 @@ export function MarkdownViewer({
   // Selection so typing a label doesn't dismiss it.
   const contentRef = useRef<HTMLDivElement>(null);
   type HlMenu =
-    | { mode: "create"; text: string; start: number; end: number; x: number; y: number; label: string }
+    | {
+        mode: "create";
+        text: string;
+        start: number;
+        end: number;
+        x: number;
+        y: number;
+        label: string;
+      }
     | { mode: "edit"; hl: Highlight; x: number; y: number; label: string };
   const [menu, setMenu] = useState<HlMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const openCreateMenu = () => {
+    // Offsets are relative to whatever is rendered in contentRef: the active
+    // section in paged mode, the whole document in single mode. Both work.
     if (editMode || !contentRef.current) return;
     const sel = getSelectionOffsets(contentRef.current);
     if (!sel) return;
@@ -134,17 +193,27 @@ export function MarkdownViewer({
   useEffect(() => {
     const container = contentRef.current;
     const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
-      | Map<string, any>
-      | undefined;
+      Map<string, any> | undefined;
     if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
 
     const groups: Record<string, Range[]> = {};
     for (const hl of highlights) {
-      if (hl.subtopicId && hl.subtopicId !== activeChunk.id) continue;
-      const range =
-        typeof hl.start === "number" && typeof hl.end === "number"
-          ? buildRange(container, hl.start, hl.end)
-          : firstTextRange(container, hl.text);
+      let range: Range | null;
+      if (singleMode) {
+        // Whole-doc view. Highlights made here carry no subtopicId and full-doc
+        // offsets — use them directly. Section highlights (subtopicId set) have
+        // offsets relative to their section, meaningless here, so anchor by text.
+        range =
+          !hl.subtopicId && typeof hl.start === "number" && typeof hl.end === "number"
+            ? buildRange(container, hl.start, hl.end)
+            : firstTextRange(container, hl.text);
+      } else {
+        if (hl.subtopicId && hl.subtopicId !== activeChunk.id) continue;
+        range =
+          typeof hl.start === "number" && typeof hl.end === "number"
+            ? buildRange(container, hl.start, hl.end)
+            : firstTextRange(container, hl.text);
+      }
       if (!range || range.collapsed) continue;
       const g = hlGroup(hl.color);
       (groups[g] ||= []).push(range);
@@ -157,7 +226,7 @@ export function MarkdownViewer({
     return () => {
       HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
     };
-  }, [highlights, activeChunk.id, renderContent, editMode]);
+  }, [highlights, activeChunk.id, renderContent, fullRender, editMode, singleMode]);
 
   // Click inside the content: if the click lands on an existing highlight, open
   // its edit popover (CSS highlights aren't DOM nodes, so we hit-test offsets).
@@ -166,9 +235,11 @@ export function MarkdownViewer({
     if (!window.getSelection()?.isCollapsed) return; // a drag-select, not a click
     const off = offsetFromPoint(contentRef.current, e.clientX, e.clientY);
     if (off == null) return;
+    // In single mode only whole-doc highlights carry offsets valid for this
+    // container; section highlights are painted by text and aren't hit-testable.
     const hit = highlights.find(
       (h) =>
-        (!h.subtopicId || h.subtopicId === activeChunk.id) &&
+        (singleMode ? !h.subtopicId : !h.subtopicId || h.subtopicId === activeChunk.id) &&
         typeof h.start === "number" &&
         typeof h.end === "number" &&
         off >= h.start &&
@@ -220,10 +291,21 @@ export function MarkdownViewer({
     return () => clearTimeout(t);
   }, [draft, editMode, file.id, onContentChange]);
 
-  // Reset to top only when the chapter changes
+  // Paginated: reset to top when the chapter changes. (Skipped in single mode,
+  // where a section change should scroll within the page instead of paging.)
   useEffect(() => {
+    if (singleMode) return;
     window.scrollTo({ top: 0 });
-  }, [activeChunk.id, file.id]);
+  }, [activeChunk.id, file.id, singleMode]);
+
+  // Single-page: switching document scrolls to top; selecting a section from the
+  // sidebar scrolls to that heading's anchor within the full document.
+  useEffect(() => {
+    if (!singleMode) return;
+    const el = activeSubtopicId ? document.getElementById(activeSubtopicId) : null;
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    else window.scrollTo({ top: 0 });
+  }, [singleMode, activeSubtopicId, file.id]);
 
   // Scrollspy, ambient progress, and earned completion. Completion is reported
   // by how far the reader has actually scrolled.
@@ -250,10 +332,11 @@ export function MarkdownViewer({
   }, [draft, editMode, file.id, onContentChange]);
 
   const stats = useMemo(() => {
-    const words = activeChunk.content.trim().split(/\s+/).filter(Boolean).length;
+    const src = singleMode ? file.content : activeChunk.content;
+    const words = src.trim().split(/\s+/).filter(Boolean).length;
     const readingMin = Math.max(1, Math.round(words / 220));
     return { words, readingMin };
-  }, [activeChunk.content]);
+  }, [singleMode, file.content, activeChunk.content]);
 
   // Search-query highlighting stays a lightweight React wrap. Persistent
   // highlights are painted via the CSS Custom Highlight API instead (see the
@@ -276,7 +359,8 @@ export function MarkdownViewer({
 
   const walkChildren = (children: any): any => {
     if (typeof children === "string") return highlightText(children);
-    if (Array.isArray(children)) return children.map((c, i) => <span key={i}>{walkChildren(c)}</span>);
+    if (Array.isArray(children))
+      return children.map((c, i) => <span key={i}>{walkChildren(c)}</span>);
     return children;
   };
 
@@ -296,9 +380,23 @@ export function MarkdownViewer({
         const solo = kids.filter((c: any) => !(typeof c === "string" && !c.trim()));
         const only = solo.length === 1 ? solo[0] : null;
         const href = only?.props?.href;
+        const src = only?.props?.src;
+        if (isArtifactUrl(src)) {
+          return (
+            <InlineArtifact
+              reference={artifactReference(src)}
+              currentWorkspaceId={workspaceId}
+              workspaceRevision={workspaceRevision}
+              currentWorkspaceFiles={workspaceFiles}
+              currentWorkspaceName={workspaceName}
+              onOpenArtifact={onOpenArtifact}
+            />
+          );
+        }
         if (href) {
           const inner = only.props?.children;
-          const text = typeof inner === "string" ? inner : Array.isArray(inner) ? inner.join("") : "";
+          const text =
+            typeof inner === "string" ? inner : Array.isArray(inner) ? inner.join("") : "";
           if (text === href || text === "") {
             const embed = detectEmbed(href);
             if (embed) return <EmbedFrame embed={embed} />;
@@ -310,6 +408,18 @@ export function MarkdownViewer({
       blockquote: (p: any) => <Callout {...p} />,
       pre: (p: any) => <CodeBlock {...p} />,
       img: (p: any) => {
+        if (isArtifactUrl(p.src)) {
+          return (
+            <InlineArtifact
+              reference={artifactReference(p.src)}
+              currentWorkspaceId={workspaceId}
+              workspaceRevision={workspaceRevision}
+              currentWorkspaceFiles={workspaceFiles}
+              currentWorkspaceName={workspaceName}
+              onOpenArtifact={onOpenArtifact}
+            />
+          );
+        }
         // ![alt](clip.mp4) renders a player; a `title` that is an image URL
         // (![alt](clip.mp4 "thumb.jpg")) becomes the preview poster.
         if (p.src && isVideoUrl(p.src)) {
@@ -343,7 +453,15 @@ export function MarkdownViewer({
       th: (p: any) => <th {...p}>{walkChildren(p.children)}</th>,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [highlights, highlightQuery],
+    [
+      highlights,
+      highlightQuery,
+      workspaceId,
+      workspaceRevision,
+      workspaceFiles,
+      workspaceName,
+      onOpenArtifact,
+    ],
   );
 
   return (
@@ -368,6 +486,36 @@ export function MarkdownViewer({
             </button>
           </div>
 
+          {menu.mode === "create" && onAskAi && (
+            <div className="mb-2 border-b border-border pb-2">
+              <div className="mb-1.5 flex items-center gap-1 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Sparkles className="h-3 w-3" /> Ask AI
+              </div>
+              <div className="flex flex-wrap gap-1 px-1">
+                {[
+                  { label: "Ask AI", action: undefined },
+                  { label: "Summarize", action: "summary" },
+                  { label: "Explain", action: "explain" },
+                  { label: "Notes", action: "notes" },
+                  { label: "Mermaid", action: "mermaid" },
+                  { label: "Rewrite", action: "rewrite" },
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    onClick={() => {
+                      onAskAi({ selection: menu.text, actionId: item.action });
+                      window.getSelection()?.removeAllRanges();
+                      setMenu(null);
+                    }}
+                    className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="mb-2 flex items-center gap-1.5 px-1">
             {HL_COLORS.map((color) => {
               const active = menu.mode === "edit" && menu.hl.color === color;
@@ -376,7 +524,9 @@ export function MarkdownViewer({
                   key={color}
                   aria-label={`Highlight ${color}`}
                   className={`h-6 w-6 rounded-full transition-transform hover:scale-110 ${
-                    active ? "ring-2 ring-foreground ring-offset-1 ring-offset-popover" : "border border-border/60"
+                    active
+                      ? "ring-2 ring-foreground ring-offset-1 ring-offset-popover"
+                      : "border border-border/60"
                   }`}
                   style={{ backgroundColor: color }}
                   onClick={() => {
@@ -385,7 +535,7 @@ export function MarkdownViewer({
                         text: menu.text,
                         color,
                         label: menu.label.trim() || undefined,
-                        subtopicId: activeChunk.id,
+                        subtopicId: singleMode ? undefined : activeChunk.id,
                         start: menu.start,
                         end: menu.end,
                       });
@@ -412,7 +562,7 @@ export function MarkdownViewer({
                       text: menu.text,
                       color: HL_COLORS[0],
                       label: menu.label.trim() || undefined,
-                      subtopicId: activeChunk.id,
+                      subtopicId: singleMode ? undefined : activeChunk.id,
                       start: menu.start,
                       end: menu.end,
                     });
@@ -456,7 +606,7 @@ export function MarkdownViewer({
                     text: menu.text,
                     color: HL_COLORS[0],
                     label: menu.label.trim() || undefined,
-                    subtopicId: activeChunk.id,
+                    subtopicId: singleMode ? undefined : activeChunk.id,
                     start: menu.start,
                     end: menu.end,
                   });
@@ -472,86 +622,101 @@ export function MarkdownViewer({
         </div>
       )}
 
-
       {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
-      <div
-        className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}
-      >
+      <div className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}>
         <article
           ref={containerRef}
           onMouseUp={openCreateMenu}
           className="docs-prose mx-auto min-w-0 flex-1"
         >
-
           <div className="mb-8">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words">
-                  {activeChunk.title}
+                  {singleMode ? stripExt(file.name) : activeChunk.title}
                 </h1>
                 <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
                 </span>
               </div>
-              
+
               <div className="mt-1.5 flex shrink-0 items-center gap-2">
-                <button
-                  onClick={onToggleBookmark}
-                  aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
-                  title={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
-                  className={`inline-flex items-center justify-center rounded-md border border-border bg-background p-2 transition-colors hover:border-primary/40 active:scale-95 ${
-                    isBookmarked ? "text-primary" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  <Bookmark
-                    className={`h-3.5 w-3.5 ${isBookmarked ? "fill-primary" : ""}`}
-                  />
-                </button>
-                <button
-                  onClick={() => setEditMode((e) => !e)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
-                >
-                  {editMode ? (
-                    <>
-                      <Eye className="h-3.5 w-3.5" /> Preview
-                    </>
-                  ) : (
-                    <>
-                      <Pencil className="h-3.5 w-3.5" /> Edit
-                    </>
-                  )}
-                </button>
+                {!singleMode && (
+                  <button
+                    onClick={onToggleBookmark}
+                    aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
+                    title={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
+                    className={`inline-flex items-center justify-center rounded-md border border-border bg-background p-2 transition-colors hover:border-primary/40 active:scale-95 ${
+                      isBookmarked ? "text-primary" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Bookmark className={`h-3.5 w-3.5 ${isBookmarked ? "fill-primary" : ""}`} />
+                  </button>
+                )}
+                {!editMode && onToggleReadingMode && (
+                  <button
+                    onClick={onToggleReadingMode}
+                    aria-label={singleMode ? "Switch to paged sections" : "Switch to single page"}
+                    title={
+                      singleMode
+                        ? "Paged: read one section at a time"
+                        : "Single page: read the whole document"
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
+                  >
+                    {singleMode ? (
+                      <>
+                        <Files className="h-3.5 w-3.5" /> Paged
+                      </>
+                    ) : (
+                      <>
+                        <ScrollText className="h-3.5 w-3.5" /> Single page
+                      </>
+                    )}
+                  </button>
+                )}
+                {!editMode && (
+                  <button
+                    onClick={() => setEditMode(true)}
+                    title="Edit document"
+                    aria-label="Edit document"
+                    className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           </div>
 
           {editMode ? (
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div>
+              {/* Sticky exit bar: leaving edit mode stays reachable no matter how
+                  far the reader scrolls. Single-pane editor keeps typing smooth —
+                  no live full-document re-render on every keystroke. */}
+              <div className="sticky top-16 z-30 -mx-1 mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/90 px-3 py-2 backdrop-blur">
+                <span className="truncate text-xs font-medium text-muted-foreground">
+                  Editing — changes save automatically
+                </span>
+                <button
+                  onClick={() => setEditMode(false)}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95"
+                >
+                  <Eye className="h-3.5 w-3.5" /> Done · Preview
+                </button>
+              </div>
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
                 className="min-h-[70vh] w-full resize-y rounded-lg border border-border bg-muted/30 p-4 font-mono text-[13px] leading-relaxed outline-none focus:border-primary/50"
               />
-              <div className="rounded-lg border border-border bg-background p-6">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[
-                    rehypeSlug,
-                    rehypeKatex,
-                    [rehypeHighlight, { detect: true, ignoreMissing: true }],
-                  ]}
-                  components={components}
-                >
-                  {draft}
-                </ReactMarkdown>
-              </div>
             </div>
           ) : (
             <div ref={contentRef} onClick={onContentClick}>
               <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
+                remarkPlugins={[remarkGfm, remarkMath, remarkInteractiveBlockMeta]}
                 rehypePlugins={[
                   rehypeSlug,
                   rehypeKatex,
@@ -559,13 +724,14 @@ export function MarkdownViewer({
                 ]}
                 components={components}
               >
-                {renderContent}
+                {singleMode ? fullRender : renderContent}
               </ReactMarkdown>
             </div>
           )}
 
-          {/* Natural stopping point — quiet acknowledgement, clear next step */}
-          {!editMode && (
+          {/* Natural stopping point — quiet acknowledgement, clear next step.
+              Only in paginated mode; single page shows the whole document. */}
+          {!editMode && !singleMode && (
             <div className="mt-20 border-t border-border pt-10">
               <div className="flex flex-col items-center gap-6">
                 <div className="w-full max-w-xl">
@@ -613,12 +779,18 @@ export function MarkdownViewer({
 
                 {(prevChunk || prevFile) && (
                   <button
-                    onClick={() => prevChunk ? onNav(file.id, prevChunk.id) : prevFile && onNav(prevFile.id, null)}
+                    onClick={() =>
+                      prevChunk
+                        ? onNav(file.id, prevChunk.id)
+                        : prevFile && onNav(prevFile.id, null)
+                    }
                     className="group flex max-w-full items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <ArrowLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-1" />
                     <span className="truncate">
-                      {prevChunk ? `Previous: ${prevChunk.title}` : `Previous Chapter: ${prevFile ? stripExt(prevFile.name) : ""}`}
+                      {prevChunk
+                        ? `Previous: ${prevChunk.title}`
+                        : `Previous Chapter: ${prevFile ? stripExt(prevFile.name) : ""}`}
                     </span>
                   </button>
                 )}
@@ -649,7 +821,7 @@ function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
   const finalId = id || slugify(text);
   return (
     <Tag id={finalId} {...rest} className="group scroll-mt-24">
-      {typeof children === "string" ? highlight?.(children) ?? children : children}
+      {typeof children === "string" ? (highlight?.(children) ?? children) : children}
       <button
         onClick={() => {
           const url = `${window.location.origin}${window.location.pathname}#${finalId}`;
@@ -682,7 +854,20 @@ function CodeBlock({ children, ...rest }: any) {
     return <Mermaid code={raw} />;
   }
 
-  const lang = /language-([\w+-]+)/.exec(cls)?.[1];
+  const encodedLang = /language-([\w+-]+)/.exec(cls)?.[1];
+  const [lang, encodedMeta] = encodedLang?.split("--") ?? [];
+  const meta =
+    codeEl?.props?.node?.data?.meta ?? codeEl?.props?.node?.meta ?? encodedMeta?.replaceAll("-", " ") ?? "";
+
+  if (lang === "interactive-html" || lang === "interactive-react") {
+    return (
+      <InteractiveBlock
+        kind={lang === "interactive-html" ? "html" : "react"}
+        code={extractText(codeEl?.props?.children)}
+        meta={meta}
+      />
+    );
+  }
 
   return (
     <div className="group relative my-6">
@@ -717,14 +902,63 @@ function extractText(node: any): string {
   return "";
 }
 
+// react-markdown exposes the code language to component overrides but not the
+// fenced-code info string. Keep the interactive flags in the language token so
+// `interactive-react preview`, `split`, and `playground` all survive parsing.
+function remarkInteractiveBlockMeta() {
+  return (tree: any) => {
+    const walk = (node: any) => {
+      if (node?.type === "code" && /^(interactive-html|interactive-react)$/.test(node.lang ?? "")) {
+        const flags = String(node.meta ?? "")
+          .toLowerCase()
+          .split(/\s+/)
+          .map((flag) => flag.replace(/[^a-z0-9]/g, ""))
+          .filter(Boolean)
+          .join("-");
+        if (flags) node.lang = `${node.lang}--${flags}`;
+      }
+      node?.children?.forEach(walk);
+    };
+    walk(tree);
+  };
+}
+
 const CALLOUT_MAP: Record<string, { icon: any; label: string; cls: string }> = {
-  NOTE: { icon: StickyNote, label: "Note", cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300" },
-  INFO: { icon: Info, label: "Info", cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300" },
-  TIP: { icon: Lightbulb, label: "Tip", cls: "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300" },
-  WARNING: { icon: AlertTriangle, label: "Warning", cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300" },
-  CAUTION: { icon: AlertTriangle, label: "Caution", cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300" },
-  DANGER: { icon: AlertOctagon, label: "Danger", cls: "border-rose-500/40 bg-rose-500/5 text-rose-700 dark:text-rose-300" },
-  IMPORTANT: { icon: AlertOctagon, label: "Important", cls: "border-violet-500/40 bg-violet-500/5 text-violet-700 dark:text-violet-300" },
+  NOTE: {
+    icon: StickyNote,
+    label: "Note",
+    cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300",
+  },
+  INFO: {
+    icon: Info,
+    label: "Info",
+    cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300",
+  },
+  TIP: {
+    icon: Lightbulb,
+    label: "Tip",
+    cls: "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
+  },
+  WARNING: {
+    icon: AlertTriangle,
+    label: "Warning",
+    cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300",
+  },
+  CAUTION: {
+    icon: AlertTriangle,
+    label: "Caution",
+    cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300",
+  },
+  DANGER: {
+    icon: AlertOctagon,
+    label: "Danger",
+    cls: "border-rose-500/40 bg-rose-500/5 text-rose-700 dark:text-rose-300",
+  },
+  IMPORTANT: {
+    icon: AlertOctagon,
+    label: "Important",
+    cls: "border-violet-500/40 bg-violet-500/5 text-violet-700 dark:text-violet-300",
+  },
 };
 
 function Callout({ children, ...rest }: any) {

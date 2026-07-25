@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
-import { Trash2, AlertTriangle, Bookmark, Highlighter, Folder, Database, ArrowRight, Palette, Sun, Moon, Monitor, ArrowLeft } from "lucide-react";
+import { Trash2, AlertTriangle, Bookmark, Folder, Database, ArrowRight, Palette, Check, ArrowLeft, ScrollText, Files, Sparkles } from "lucide-react";
 import { Link } from "@tanstack/react-router";
+import { AiSettings } from "./ai/AiSettings";
 import type { Highlight } from "@/lib/dom-highlighter";
 import type { MdFile } from "@/lib/markdown-utils";
+import type { ThemePref, ReadingMode, ReadingFont } from "@/lib/persistence";
+import { STORAGE_QUOTA_FRACTION, formatBytes } from "@/lib/storage-limits";
 
 export interface SettingsPageProps {
-  theme: "light" | "dark" | "system";
-  onThemeChange: (theme: "light" | "dark" | "system") => void;
   workspaces: { id: string; name: string }[];
   currentWorkspaceId: string | null;
   onRenameWorkspace: (id: string, name: string) => void;
@@ -21,11 +22,15 @@ export interface SettingsPageProps {
   onNavigate: (fileId: string, subtopicId?: string) => void;
   files: MdFile[];
   onOpenWorkspace: (id: string) => void;
+  theme: ThemePref;
+  onSetTheme: (theme: ThemePref) => void;
+  readingMode: ReadingMode;
+  onSetReadingMode: (mode: ReadingMode) => void;
+  readingFont: ReadingFont;
+  onSetReadingFont: (font: ReadingFont) => void;
 }
 
 export function SettingsPage({
-  theme,
-  onThemeChange,
   workspaces,
   currentWorkspaceId,
   onRenameWorkspace,
@@ -40,11 +45,20 @@ export function SettingsPage({
   onNavigate,
   files,
   onOpenWorkspace,
+  theme,
+  onSetTheme,
+  readingMode,
+  onSetReadingMode,
+  readingFont,
+  onSetReadingFont,
 }: SettingsPageProps) {
-  const [activeTab, setActiveTab] = useState<"theme" | "workspace" | "storage">("theme");
+  const [activeTab, setActiveTab] = useState<"appearance" | "ai" | "workspace" | "storage">(
+    "appearance",
+  );
 
   const tabs = [
-    { id: "theme", label: "Theme", icon: Palette },
+    { id: "appearance", label: "Appearance", icon: Palette },
+    { id: "ai", label: "Ask AI", icon: Sparkles },
     { id: "workspace", label: "Workspace", icon: Folder },
     { id: "storage", label: "Storage", icon: Database },
   ] as const;
@@ -92,9 +106,18 @@ export function SettingsPage({
         </nav>
 
         <div className="min-w-0">
-          {activeTab === "theme" && (
-            <AppearanceSettings theme={theme} onThemeChange={onThemeChange} />
+
+          {activeTab === "appearance" && (
+            <AppearanceSettings
+              theme={theme}
+              onSetTheme={onSetTheme}
+              readingMode={readingMode}
+              onSetReadingMode={onSetReadingMode}
+              readingFont={readingFont}
+              onSetReadingFont={onSetReadingFont}
+            />
           )}
+          {activeTab === "ai" && <AiSettings />}
           {activeTab === "workspace" && (
             <div className="flex flex-col gap-12">
               <WorkspaceSettings
@@ -122,6 +145,190 @@ export function SettingsPage({
           {activeTab === "storage" && (
             <StorageSettings onClearStorage={onClearStorage} />
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Swatch previews approximate each theme so the picker reads at a glance; the
+// applied theme itself is driven by the CSS token sets in styles.css.
+const READER_THEME_META: {
+  id: ThemePref;
+  label: string;
+  hint: string;
+  bg: string;
+  fg: string;
+  muted: string;
+  accent: string;
+}[] = [
+  { id: "light", label: "Light", hint: "Bright, high contrast", bg: "#ffffff", fg: "#1c1c28", muted: "#6b7280", accent: "#2b2b40" },
+  { id: "sepia", label: "Sepia", hint: "Warm paper, easy on the eyes", bg: "#f4ecd8", fg: "#4a3f35", muted: "#8a7a68", accent: "#a8562f" },
+  { id: "dark", label: "Dark", hint: "Balanced slate for night reading", bg: "#0f1420", fg: "#eceef2", muted: "#9aa3b2", accent: "#e6e9ef" },
+  { id: "nord", label: "Nord", hint: "Cool blue-grey, low glare", bg: "#2e3440", fg: "#eceff4", muted: "#a9b3c4", accent: "#88c0d0" },
+  { id: "black", label: "Black", hint: "True black for OLED screens", bg: "#000000", fg: "#e8e8e8", muted: "#b3b3b3", accent: "#cfcfcf" },
+];
+
+// Explicit font stacks so each preview shows its own face regardless of the
+// currently applied reading font.
+const READING_FONT_META: { id: ReadingFont; label: string; hint: string; family: string }[] = [
+  { id: "system", label: "System", hint: "Your device's native font (default)", family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' },
+  { id: "serif", label: "Source Serif", hint: "Warm literary serif", family: '"Source Serif 4", ui-serif, Georgia, serif' },
+  { id: "newsreader", label: "Newsreader", hint: "Elegant editorial serif", family: '"Newsreader", ui-serif, Georgia, serif' },
+  { id: "sans", label: "Inter", hint: "Clean modern sans", family: '"Inter", ui-sans-serif, system-ui, sans-serif' },
+  { id: "hyperlegible", label: "Atkinson Hyperlegible", hint: "Maximum legibility", family: '"Atkinson Hyperlegible", ui-sans-serif, sans-serif' },
+];
+
+const READING_MODE_META: { id: ReadingMode; label: string; hint: string; icon: typeof Files }[] = [
+  { id: "paginated", label: "Paged sections", hint: "One section per page, with prev / next", icon: Files },
+  { id: "single", label: "Single page", hint: "The whole document on one scroll", icon: ScrollText },
+];
+
+function AppearanceSettings({
+  theme,
+  onSetTheme,
+  readingMode,
+  onSetReadingMode,
+  readingFont,
+  onSetReadingFont,
+}: {
+  theme: ThemePref;
+  onSetTheme: (theme: ThemePref) => void;
+  readingMode: ReadingMode;
+  onSetReadingMode: (mode: ReadingMode) => void;
+  readingFont: ReadingFont;
+  onSetReadingFont: (font: ReadingFont) => void;
+}) {
+  return (
+    <div className="space-y-12">
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-lg font-semibold">Reader theme</h2>
+          <p className="text-sm text-muted-foreground">
+            Choose the background that&apos;s most comfortable for extended reading. Text, links, tables,
+            borders and selection all adapt automatically with WCAG-compliant contrast.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          {READER_THEME_META.map((t) => {
+            const active = theme === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => onSetTheme(t.id)}
+                aria-pressed={active}
+                className={`group relative overflow-hidden rounded-xl border text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                  active ? "border-primary ring-2 ring-primary/40" : "border-border"
+                }`}
+              >
+                {/* Mini reading preview rendered in the theme's own colors. */}
+                <div className="p-4" style={{ backgroundColor: t.bg, color: t.fg }}>
+                  <div className="text-sm font-semibold" style={{ fontFamily: "var(--font-heading)" }}>
+                    Aa — Reading
+                  </div>
+                  <div className="mt-1 text-xs leading-snug" style={{ fontFamily: "var(--font-body)" }}>
+                    The quick brown fox jumps over the lazy dog.
+                  </div>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: t.accent }} />
+                    <span className="text-[11px]" style={{ color: t.muted }}>
+                      link · secondary
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between border-t border-border bg-card px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-foreground">{t.label}</div>
+                    <div className="truncate text-[11px] text-muted-foreground">{t.hint}</div>
+                  </div>
+                  {active && (
+                    <span className="ml-2 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <Check className="h-3 w-3" />
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-lg font-semibold">Reading font</h2>
+          <p className="text-sm text-muted-foreground">
+            The typeface used for document body text and headings.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {READING_FONT_META.map((f) => {
+            const active = readingFont === f.id;
+            return (
+              <button
+                key={f.id}
+                onClick={() => onSetReadingFont(f.id)}
+                aria-pressed={active}
+                className={`flex items-center justify-between gap-4 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                  active ? "border-primary ring-2 ring-primary/40" : "border-border"
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-2xl leading-tight text-foreground" style={{ fontFamily: f.family }}>
+                    Ag
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-foreground">{f.label}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{f.hint}</div>
+                </div>
+                {active && (
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Check className="h-3 w-3" />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-lg font-semibold">Document layout</h2>
+          <p className="text-sm text-muted-foreground">
+            Read a document section by section, or all at once on a single page. You can also switch
+            from the toolbar while reading.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {READING_MODE_META.map((m) => {
+            const active = readingMode === m.id;
+            const Icon = m.icon;
+            return (
+              <button
+                key={m.id}
+                onClick={() => onSetReadingMode(m.id)}
+                aria-pressed={active}
+                className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                  active ? "border-primary ring-2 ring-primary/40" : "border-border"
+                }`}
+              >
+                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${active ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-foreground">{m.label}</div>
+                  <div className="text-[11px] text-muted-foreground">{m.hint}</div>
+                </div>
+                {active && (
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <Check className="h-3 w-3" />
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -236,13 +443,7 @@ function StorageSettings({ onClearStorage }: { onClearStorage: () => void }) {
     }
   }, []);
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-  };
+  const cap = quota != null ? Math.floor(quota * STORAGE_QUOTA_FRACTION) : null;
 
   return (
     <div className="space-y-6">
@@ -256,7 +457,7 @@ function StorageSettings({ onClearStorage }: { onClearStorage: () => void }) {
         <p className="mt-1 text-sm text-muted-foreground">
           {usage !== null && quota !== null ? (
             <>
-              Using <strong className="text-foreground">{formatBytes(usage)}</strong> of available <strong className="text-foreground">{formatBytes(quota)}</strong>
+              Using <strong className="text-foreground">{formatBytes(usage)}</strong> of available <strong className="text-foreground">{formatBytes(quota/20)}</strong>
             </>
           ) : (
             "Calculating..."
@@ -441,44 +642,3 @@ function HighlightSettings({
   );
 }
 
-function AppearanceSettings({ theme, onThemeChange }: { theme: "light" | "dark" | "system"; onThemeChange: (theme: "light" | "dark" | "system") => void }) {
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold">Appearance</h2>
-        <p className="text-sm text-muted-foreground">Customize the look and feel of the application.</p>
-      </div>
-
-      <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-        <h3 className="text-sm font-medium text-foreground">Theme</h3>
-        <p className="mb-4 mt-1 text-sm text-muted-foreground">Select your preferred color theme.</p>
-        
-        <div className="flex flex-col gap-4 sm:flex-row">
-          <button
-            onClick={() => onThemeChange("light")}
-            className={`flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border-2 p-4 transition-all hover:bg-accent ${theme === "light" ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground"}`}
-          >
-            <Sun className="h-6 w-6" />
-            <span className="text-sm font-medium">Light</span>
-          </button>
-          
-          <button
-            onClick={() => onThemeChange("dark")}
-            className={`flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border-2 p-4 transition-all hover:bg-accent ${theme === "dark" ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground"}`}
-          >
-            <Moon className="h-6 w-6" />
-            <span className="text-sm font-medium">Dark</span>
-          </button>
-
-          <button
-            onClick={() => onThemeChange("system")}
-            className={`flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border-2 p-4 transition-all hover:bg-accent ${theme === "system" ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground"}`}
-          >
-            <Monitor className="h-6 w-6" />
-            <span className="text-sm font-medium">System</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}

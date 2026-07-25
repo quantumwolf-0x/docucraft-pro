@@ -16,9 +16,33 @@ export interface MdFile {
   id: string;
   name: string;
   content: string;
+  /** Original file bytes for binary documents, stored as a data URL. */
+  data?: string;
+  mimeType?: string;
+  size?: number;
+  /** Epoch ms the file entered the workspace; used for date sorting. */
+  addedAt?: number;
+  kind?: DocumentKind;
   headings: MdHeading[];
   subtopics: MdChunk[];
 }
+
+export type DocumentKind =
+  | "markdown"
+  | "text"
+  | "docx"
+  | "pdf"
+  | "spreadsheet"
+  | "csv"
+  | "json"
+  | "presentation"
+  | "google-doc"
+  | "google-slide"
+  | "image"
+  | "video"
+  | "audio"
+  | "html"
+  | "unknown";
 
 import GithubSlugger, { slug } from "github-slugger";
 
