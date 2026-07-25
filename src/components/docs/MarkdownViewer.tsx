@@ -30,6 +30,11 @@ import {
   ScrollText,
   Files,
   Sparkles,
+  BookOpen,
+  ChevronLeft,
+  Star,
+  Share,
+  MoreHorizontal,
 } from "lucide-react";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ReadingMode } from "@/lib/persistence";
@@ -44,7 +49,7 @@ import {
   offsetFromPoint,
   firstTextRange,
 } from "@/lib/text-offsets";
-import { splitIntoSubtopics } from "@/lib/markdown-utils";
+import { splitIntoSubtopics, headingChunkMap } from "@/lib/markdown-utils";
 import { InlineArtifact } from "./InlineArtifact";
 import { InteractiveBlock } from "./InteractiveBlock";
 import {
@@ -52,6 +57,13 @@ import {
   isArtifactUrl,
   prepareWorkspaceEmbeds,
 } from "@/lib/workspace-artifacts";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface Props {
   file: MdFile;
@@ -121,12 +133,18 @@ export function MarkdownViewer({
     [file.subtopics, file.content, file.name],
   );
 
+  // A selected heading may be a nested ##/### that lives inside a # page rather
+  // than being a page itself; resolve it to its parent # chunk id.
+  const chunkForHeading = useMemo(() => headingChunkMap(file.content), [file.content]);
+
   const activeChunk = useMemo(() => {
+    const targetId =
+      (activeSubtopicId && chunkForHeading[activeSubtopicId]) || activeSubtopicId;
     return (
-      allChunks.find((s) => s.id === activeSubtopicId) ||
+      allChunks.find((s) => s.id === targetId) ||
       allChunks[0] || { id: "preamble", title: stripExt(file.name), content: file.content }
     );
-  }, [allChunks, activeSubtopicId, file.content, file.name]);
+  }, [allChunks, activeSubtopicId, chunkForHeading, file.content, file.name]);
 
   const chunkIndex = allChunks.findIndex((s) => s.id === activeChunk.id);
   const isLastChunk = chunkIndex === allChunks.length - 1;
@@ -291,12 +309,18 @@ export function MarkdownViewer({
     return () => clearTimeout(t);
   }, [draft, editMode, file.id, onContentChange]);
 
-  // Paginated: reset to top when the chapter changes. (Skipped in single mode,
-  // where a section change should scroll within the page instead of paging.)
+  // Paginated: when a nested ##/### heading inside the page is selected, scroll
+  // to its anchor; otherwise (page's own # or a page change) reset to top.
+  // (Skipped in single mode, which scrolls within the whole-doc render below.)
   useEffect(() => {
     if (singleMode) return;
-    window.scrollTo({ top: 0 });
-  }, [activeChunk.id, file.id, singleMode]);
+    const el =
+      activeSubtopicId && activeSubtopicId !== activeChunk.id
+        ? document.getElementById(activeSubtopicId)
+        : null;
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    else window.scrollTo({ top: 0 });
+  }, [activeChunk.id, activeSubtopicId, file.id, singleMode]);
 
   // Single-page: switching document scrolls to top; selecting a section from the
   // sidebar scrolls to that heading's anchor within the full document.
@@ -464,8 +488,90 @@ export function MarkdownViewer({
     ],
   );
 
+
   return (
     <>
+      {/* Sticky Top Navigation Bar matching Nav.png */}
+      {!singleMode && (
+        <div className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b border-border/50 bg-background/80 px-4 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+          {!singleMode && allChunks.length > 1 && (
+            <div className="flex items-center gap-1 mr-2">
+              <button 
+                onClick={() => prevChunk && onNav(file.id, prevChunk.id)}
+                disabled={!prevChunk}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button 
+                onClick={() => nextChunk && onNav(file.id, nextChunk.id)}
+                disabled={!nextChunk}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          
+          <Select
+            value={activeChunk.id}
+            onValueChange={(val) => onNav(file.id, val)}
+          >
+            <SelectTrigger className="w-fit h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
+              <BookOpen className="h-4 w-4 text-muted-foreground" />
+              <span className="truncate max-w-[150px] sm:max-w-[300px] text-left">
+                {stripExt(file.name)}
+              </span>
+            </SelectTrigger>
+            {!singleMode && allChunks.length > 1 && (
+              <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
+                <div className="px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
+                  Sections
+                </div>
+                <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                  {allChunks.map((chunk) => (
+                    <SelectItem key={chunk.id} value={chunk.id} className="cursor-pointer pl-2">
+                      {chunk.title.length > 20 ? chunk.title.substring(0, 20) + "..." : chunk.title}
+                    </SelectItem>
+                  ))}
+                </div>
+              </SelectContent>
+            )}
+          </Select>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {!singleMode && (
+            <button
+              onClick={onToggleBookmark}
+              aria-label={isBookmarked ? "Remove bookmark" : "Bookmark"}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Star className={`h-4 w-4 ${isBookmarked ? "fill-foreground text-foreground" : ""}`} />
+            </button>
+          )}
+          {!editMode && onToggleReadingMode && (
+            <button
+              onClick={onToggleReadingMode}
+              title={singleMode ? "Paged: read one section at a time" : "Single page: read the whole document"}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Files className="h-4 w-4" />
+            </button>
+          )}
+          {!editMode && (
+            <button
+              onClick={() => setEditMode(true)}
+              title="Edit document"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+      )}
       {menu && !editMode && (
         <div
           ref={menuRef}
@@ -633,60 +739,36 @@ export function MarkdownViewer({
           <div className="mb-8">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
-                <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words">
+                <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words mb-1">
                   {singleMode ? stripExt(file.name) : activeChunk.title}
                 </h1>
                 <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
                 </span>
               </div>
-
-              <div className="mt-1.5 flex shrink-0 items-center gap-2">
-                {!singleMode && (
-                  <button
-                    onClick={onToggleBookmark}
-                    aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
-                    title={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
-                    className={`inline-flex items-center justify-center rounded-md border border-border bg-background p-2 transition-colors hover:border-primary/40 active:scale-95 ${
-                      isBookmarked ? "text-primary" : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <Bookmark className={`h-3.5 w-3.5 ${isBookmarked ? "fill-primary" : ""}`} />
-                  </button>
-                )}
-                {!editMode && onToggleReadingMode && (
-                  <button
-                    onClick={onToggleReadingMode}
-                    aria-label={singleMode ? "Switch to paged sections" : "Switch to single page"}
-                    title={
-                      singleMode
-                        ? "Paged: read one section at a time"
-                        : "Single page: read the whole document"
-                    }
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
-                  >
-                    {singleMode ? (
-                      <>
-                        <Files className="h-3.5 w-3.5" /> Paged
-                      </>
-                    ) : (
-                      <>
-                        <ScrollText className="h-3.5 w-3.5" /> Single page
-                      </>
-                    )}
-                  </button>
-                )}
-                {!editMode && (
-                  <button
-                    onClick={() => setEditMode(true)}
-                    title="Edit document"
-                    aria-label="Edit document"
-                    className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
+              
+              {singleMode && (
+                <div className="mt-1.5 flex shrink-0 items-center gap-2">
+                  {!editMode && onToggleReadingMode && (
+                    <button
+                      onClick={onToggleReadingMode}
+                      title="Paged: read one section at a time"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
+                    >
+                      <Files className="h-3.5 w-3.5" /> Paged
+                    </button>
+                  )}
+                  {!editMode && (
+                    <button
+                      onClick={() => setEditMode(true)}
+                      title="Edit document"
+                      className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

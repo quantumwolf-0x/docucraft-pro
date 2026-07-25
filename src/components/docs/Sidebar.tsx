@@ -9,25 +9,62 @@ import {
   ArrowDown,
   Plus,
   Highlighter,
+  Sparkles,
+  Search,
+  PanelLeft,
+  FileText,
+  FileType,
+  FileSpreadsheet,
+  FileJson,
+  FileImage,
+  FileVideo,
+  FileAudio,
+  Presentation,
+  Globe,
+  File as FileIcon,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { splitIntoSubtopics } from "@/lib/markdown-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
-import type { MdFile } from "@/lib/markdown-utils";
+import type { MdFile, DocumentKind } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
 import { fileLabel, getDocumentKind } from "@/lib/document-utils";
-import type { ProgressMap } from "@/lib/reading-progress";
+import { WorkspaceMenu } from "./WorkspaceMenu";
+
+// Arc-style "favicon" per file type — a small colored glyph that anchors each
+// row so the list scans by shape, not just text.
+const KIND_ICON: Partial<Record<DocumentKind, LucideIcon>> = {
+  markdown: FileText,
+  text: FileText,
+  docx: FileType,
+  pdf: FileType,
+  spreadsheet: FileSpreadsheet,
+  csv: FileSpreadsheet,
+  json: FileJson,
+  presentation: Presentation,
+  "google-doc": Globe,
+  "google-slide": Globe,
+  html: Globe,
+  image: FileImage,
+  video: FileVideo,
+  audio: FileAudio,
+};
+
+function kindIcon(kind: DocumentKind): LucideIcon {
+  return KIND_ICON[kind] ?? FileIcon;
+}
 
 /**
  * How the file list is presented in the sidebar.
- * - `mode` is driven by the chip row: All (flat), Grouped (by file type),
- *   or Saved (bookmarks only).
+ * - `mode` is driven by the chip row: All (flat), Recent (most-recently
+ *   opened), Grouped (by file type), or Saved (bookmarks only).
  * - `sort`/`dir` are set from the three-dots menu. `manual` keeps the real
  *   file order so drag/Move Up-Down reordering stays meaningful.
  */
 export type SidebarView = {
   sort: "manual" | "name" | "date";
   dir: "asc" | "desc";
-  mode: "all" | "grouped" | "saved";
+  mode: "all" | "recent" | "grouped" | "saved";
 };
 export const DEFAULT_VIEW: SidebarView = {
   sort: "manual",
@@ -39,7 +76,8 @@ interface Props {
   files: MdFile[];
   activeFileId: string | null;
   activeHeadingId: string | null;
-  progress: ProgressMap;
+  /** File ids in most-recently-opened order — drives the "Recent" chip. */
+  recentFileIds: string[];
   expanded: Record<string, boolean>;
   onToggleFile: (fileId: string) => void;
   onSelect: (fileId: string, headingId?: string) => void;
@@ -62,6 +100,8 @@ interface Props {
   view?: SidebarView;
   onView?: (view: SidebarView) => void;
   onOpenSettings: () => void;
+  /** Open the Ask AI panel. When omitted, the Ask AI button is hidden. */
+  onAskAi?: () => void;
   onNewWorkspace?: (name?: string) => void;
   onImportWorkspace?: (file: File) => void;
   onExportWorkspace?: () => void;
@@ -71,13 +111,22 @@ interface Props {
   workspaces?: { id: string; name: string }[];
   currentWorkspaceId?: string | null;
   onSwitchWorkspace?: (id: string) => void;
+  onDeleteWorkspace?: (id: string) => void;
+  /**
+   * Docked = the desktop/landscape full-height rail with no app header. It grows
+   * a workspace picker, a search field, and a continue-reading card at the top.
+   * Undocked (mobile drawer) keeps the compact Ask AI hero layout.
+   */
+  docked?: boolean;
+  onOpenPalette?: () => void;
+  onToggleSidebar?: () => void;
 }
 
 export function Sidebar({
   files,
   activeFileId,
   activeHeadingId,
-  progress,
+  recentFileIds,
   expanded,
   onToggleFile,
   onSelect,
@@ -99,6 +148,7 @@ export function Sidebar({
   view = DEFAULT_VIEW,
   onView,
   onOpenSettings,
+  onAskAi,
   onNewWorkspace,
   onImportWorkspace,
   onExportWorkspace,
@@ -106,6 +156,10 @@ export function Sidebar({
   workspaces = [],
   currentWorkspaceId,
   onSwitchWorkspace,
+  onDeleteWorkspace,
+  docked = false,
+  onOpenPalette,
+  onToggleSidebar,
 }: Props) {
   // Progressive disclosure: chapters stay collapsed unless the reader opens
   // them; the current chapter is expanded automatically. This keeps the
@@ -117,6 +171,12 @@ export function Sidebar({
   }, [activeHeadingId]);
 
   const total = files.length;
+
+  // Recent: files in most-recently-opened order (persisted in IndexedDB as
+  // ui.recentFileIds), filtered to those still present in the workspace.
+  const recentFiles = recentFileIds
+    .map((id) => files.find((f) => f.id === id))
+    .filter((f): f is MdFile => !!f);
 
   // Apply the sidebar view (sort → group). Manual reorder is only meaningful
   // against the real file order in a flat list, so it is disabled once a sort
@@ -148,40 +208,14 @@ export function Sidebar({
         ).map(([label, items]) => ({ label, items }))
       : [{ label: "", items: sorted }];
 
-  const renderSubtopics = (subtopics: any[], fileId: string) => (
-    <ul className="space-y-0.5">
-      {subtopics.map((chunk) => {
-        const active = activeFileId === fileId && activeHeadingId === chunk.id;
-        return (
-          <li key={chunk.id}>
-            <button
-              onClick={() => onSelect(fileId, chunk.id)}
-              className={`group relative flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[13px] leading-snug transition-all duration-150 hover:translate-x-0.5 ${
-                active
-                  ? "font-medium text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-              style={{ paddingLeft: "14px" }}
-            >
-              {active && (
-                <span
-                  className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r bg-primary"
-                  aria-hidden
-                />
-              )}
-              <span className="truncate">{chunk.title}</span>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
-  );
+
 
   const renderFileRow = (file: MdFile) => {
     const realIndex = files.indexOf(file);
     const current = file.id === activeFileId;
     const open = expanded[file.id] ?? current;
     const kind = kindOf(file);
+    const KindIcon = kindIcon(kind);
     const mins = readingMinutes(file.content);
     const title = file.name.replace(
       /\.(md|markdown|mdx|txt|docx|pdf|xlsx|xls|csv|json|ppt|pptx|gdoc|gslides)$/i,
@@ -194,24 +228,18 @@ export function Sidebar({
             current ? "bg-accent/60" : ""
           }`}
         >
-          {["presentation", "pdf", "csv", "json", "image"].includes(kind) ? (
-            <div className="h-8 w-5 shrink-0" />
-          ) : (
-            <button
-              onClick={() => onToggleFile(file.id)}
-              className="flex h-8 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
-              aria-label={`${open ? "Collapse" : "Expand"} ${title}`}
-            >
-              <ChevronRight
-                className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform ${open ? "rotate-90" : ""}`}
-              />
-            </button>
-          )}
+
           <button
             onClick={() => onSelect(file.id)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pr-1.5 text-left"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
             aria-current={current ? "page" : undefined}
           >
+            <KindIcon
+              className={`h-3.5 w-3.5 shrink-0 ${
+                current ? "text-primary" : "text-muted-foreground/70"
+              }`}
+              aria-hidden
+            />
             <span
               className={`min-w-0 flex-1 truncate text-[13px] ${
                 current ? "font-semibold text-foreground" : "font-medium text-foreground/80"
@@ -248,24 +276,93 @@ export function Sidebar({
             }
           />
         </div>
-        {open && (file.subtopics || splitIntoSubtopics(file.content, file.name))?.length > 0 && (
-          <div className="relative mb-2 mt-0.5 pl-3">
-            {renderSubtopics(file.subtopics || splitIntoSubtopics(file.content, file.name), file.id)}
-          </div>
-        )}
       </div>
     );
   };
 
   return (
     <aside className="flex h-full flex-col">
+      {docked ? (
+        <>
+          {/* Workspace picker replaces the removed app header: Localdox logo,
+              workspace name, and doc count, opening the workspace menu. */}
+          {onSwitchWorkspace && (
+            <div className="flex items-center gap-1 px-3 pt-3">
+              {onToggleSidebar && (
+                <button
+                  onClick={onToggleSidebar}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  aria-label="Toggle sidebar"
+                  title="Toggle sidebar"
+                >
+                  <PanelLeft className="h-4 w-4" />
+                </button>
+              )}
+              <WorkspaceMenu
+                variant="sidebar"
+                docCount={total}
+                workspaces={workspaces}
+                currentId={currentWorkspaceId ?? null}
+                onSwitch={onSwitchWorkspace}
+                onNew={(name) => onNewWorkspace?.(name)}
+                onDelete={(id) => onDeleteWorkspace?.(id)}
+                onImport={(file) => onImportWorkspace?.(file)}
+                onExport={() => onExportWorkspace?.()}
+                onShare={() => onShareWorkspace?.()}
+              />
+            </div>
+          )}
+
+          {/* Search trigger — opens the command palette (docs + Ask AI). */}
+          {onOpenPalette && (
+            <div className="px-3 pt-3">
+              <button
+                onClick={onOpenPalette}
+                className="flex w-full items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              >
+                <Search className="h-4 w-4 shrink-0" />
+                <span className="flex-1 truncate text-left text-xs">Search docs or ask AI...</span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
+                    ⌘
+                  </kbd>
+                  <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-[10px]">
+                    K
+                  </kbd>
+                </span>
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
+        // Ask AI is the mobile-drawer hero action, pinned Arc-style at the top.
+        onAskAi && (
+          <div className="p-3 pb-0">
+            <button
+              onClick={onAskAi}
+              className="group flex w-full items-center gap-2 rounded-xl border border-primary/20 bg-primary/10 px-3 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/40 hover:bg-primary/15"
+            >
+              <Sparkles className="h-4 w-4 shrink-0 transition-transform group-hover:scale-110" />
+              <span className="flex-1 text-left">Ask AI</span>
+              <ChevronRight className="h-4 w-4 shrink-0 opacity-40 transition-transform group-hover:translate-x-0.5" />
+            </button>
+          </div>
+        )
+      )}
+
       {/* Chip row: switches the file list between All / Grouped / Saved. */}
-      <div className="flex items-center border-b border-border p-3">
+      <div className="mt-3 flex w-full min-w-0 items-center border-b border-border p-3 pt-0">
         <SidebarChips view={view} onView={onView} />
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3">
-        {view.mode === "saved" ? (
+        {view.mode === "recent" ? (
+          recentFiles.length === 0 ? (
+            <p className="px-2 py-4 text-[13px] text-muted-foreground">No recently opened files.</p>
+          ) : (
+            recentFiles.map(renderFileRow)
+          )
+        ) : view.mode === "saved" ? (
           bookmarks.length === 0 ? (
             <p className="px-2 py-4 text-[13px] text-muted-foreground">No saved items yet.</p>
           ) : (
@@ -441,8 +538,8 @@ function FileMenu({
 
 /**
  * The chip row that replaces the workspace name: switches the file list
- * between All (flat), Grouped (by file type), and Saved (bookmarks). Shared
- * by the desktop header and the mobile chip row.
+ * between All (flat), Recent (most-recently opened), Grouped (by file type),
+ * and Saved (bookmarks). Shared by the desktop header and the mobile chip row.
  */
 function SidebarChips({
   view = DEFAULT_VIEW,
@@ -453,12 +550,13 @@ function SidebarChips({
 }) {
   const chips = [
     ["all", "All"],
+    ["recent", "Recent"],
     ["grouped", "Grouped"],
     ["saved", "Saved"],
   ] as const;
 
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex w-full min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {chips.map(([key, label]) => (
         <button
           key={key}

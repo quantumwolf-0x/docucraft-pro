@@ -71,7 +71,7 @@ function ViewerFrame({
   const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
   return (
     <section className="min-h-[calc(100dvh-4rem)] bg-background">
-      <div className="sticky top-16 z-20 flex min-h-14 items-center gap-3 border-b border-border bg-background/90 px-4 backdrop-blur md:px-7">
+      <div className="sticky top-0 z-20 flex min-h-14 items-center gap-3 border-b border-border bg-background/90 px-4 backdrop-blur md:px-7">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
           <FileText className="h-4 w-4" />
         </div>
@@ -461,11 +461,11 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
   // just the slide and two swipe buttons.
   if (embedded) {
     return (
-      <section ref={containerRef} className="presentation-shell relative bg-[#1b1d22] text-white">
+      <section ref={containerRef} className="presentation-shell relative bg-background text-foreground">
         {error ? (
-          <ErrorState message={error} dark />
+          <ErrorState message={error} />
         ) : !slide ? (
-          <Loading label="Building presentation" dark />
+          <Loading label="Building presentation" />
         ) : (
           <div className="relative flex items-center justify-center overflow-hidden p-4 md:p-8">
             {slideEl}
@@ -493,10 +493,10 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
   return (
     <section
       ref={containerRef}
-      className="presentation-shell min-h-[calc(100dvh-4rem)] bg-[#1b1d22] text-white"
+      className="presentation-shell min-h-[calc(100dvh-4rem)] bg-background text-foreground"
     >
-      <div className="flex h-14 items-center gap-3 border-b border-white/10 px-4">
-        <Presentation className="h-4 w-4 text-sky-300" />
+      <div className="flex h-14 items-center gap-3 border-b border-border px-4">
+        <Presentation className="h-4 w-4 text-primary" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{file.name}</span>
         {slides.length > 0 && (
           <div className="flex items-center gap-1">
@@ -504,18 +504,18 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
               onClick={() => setCurrent((value) => Math.max(value - 1, 0))}
               disabled={current === 0}
               aria-label="Previous slide"
-              className="rounded p-1.5 hover:bg-white/10 transition-colors disabled:opacity-25 disabled:hover:bg-transparent"
+              className="rounded p-1.5 hover:bg-accent transition-colors disabled:opacity-25 disabled:hover:bg-transparent"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <span className="min-w-[3rem] text-center text-xs text-white/55 tabular-nums">
+            <span className="min-w-[3rem] text-center text-xs text-muted-foreground tabular-nums">
               {current + 1} / {slides.length}
             </span>
             <button
               onClick={() => setCurrent((value) => Math.min(value + 1, slides.length - 1))}
               disabled={current === slides.length - 1}
               aria-label="Next slide"
-              className="rounded p-1.5 hover:bg-white/10 transition-colors disabled:opacity-25 disabled:hover:bg-transparent"
+              className="rounded p-1.5 hover:bg-accent transition-colors disabled:opacity-25 disabled:hover:bg-transparent"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -525,14 +525,14 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
           <button
             onClick={onToggleBookmark}
             title={isBookmarked ? "Remove bookmark" : "Bookmark this file"}
-            className="rounded p-1.5 hover:bg-white/10 transition-colors"
+            className="rounded p-1.5 hover:bg-accent transition-colors"
           >
-            <Bookmark className={`h-4 w-4 ${isBookmarked ? "fill-sky-400 text-sky-400" : "text-white/70 hover:text-white"}`} />
+            <Bookmark className={`h-4 w-4 ${isBookmarked ? "fill-primary text-primary" : "text-muted-foreground hover:text-foreground"}`} />
           </button>
         )}
         <button
           onClick={toggleFullscreen}
-          className="rounded p-1.5 hover:bg-white/10 transition-colors"
+          className="rounded p-1.5 hover:bg-accent transition-colors"
           aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
         >
           {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
@@ -540,9 +540,9 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
 
       </div>
       {error ? (
-        <ErrorState message={error} dark />
+        <ErrorState message={error} />
       ) : !slide ? (
-        <Loading label="Building presentation" dark />
+        <Loading label="Building presentation" />
       ) : (
         <div className="flex min-h-[calc(100dvh-7.5rem)] flex-col">
           <div className="relative flex flex-1 items-center justify-center overflow-hidden p-4 md:p-8">
@@ -556,7 +556,7 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
                 className={`presentation-thumb ${current === index ? "is-active" : ""}`}
                 aria-label={`Show slide ${item.number}`}
               >
-                <span className="text-[10px] text-white/45">{item.number}</span>
+                <span className="text-[10px] text-muted-foreground">{item.number}</span>
                 <span className="presentation-thumb-card">
                   <strong>{item.title}</strong>
                   <small>{item.text}</small>

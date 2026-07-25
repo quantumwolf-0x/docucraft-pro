@@ -120,9 +120,10 @@ export function splitIntoSubtopics(content: string, fileName: string): MdChunk[]
       continue;
     }
     
-    // Split on H1 and H2 (level 1 and 2)
+    // Split on H1 only — each subtopic spans one top-level # heading up to the
+    // next #, keeping all nested H2+ content inside that section.
     if (!inCode) {
-      const m = /^(#{1,2})\s+(.+?)\s*#*\s*$/.exec(line);
+      const m = /^(#)\s+(.+?)\s*#*\s*$/.exec(line);
       if (m) {
         if (currentChunk.some(l => l.trim().length > 0)) {
           chunks.push({
@@ -155,6 +156,37 @@ export function splitIntoSubtopics(content: string, fileName: string): MdChunk[]
       content: currentChunk.join("\n")
     });
   }
-  
+
   return chunks;
+}
+
+/**
+ * Map every heading's slug to the id of the `#` subtopic that contains it.
+ * Because subtopics now split on `#` only, a nested `##`/`###` heading is no
+ * longer its own page — selecting it in the ToC must resolve to its parent `#`
+ * page. Keys mirror parseHeadings (a slugger over every heading, matching the
+ * ToC ids); values mirror splitIntoSubtopics (a slugger over `#` titles only,
+ * matching chunk ids).
+ */
+export function headingChunkMap(content: string): Record<string, string> {
+  const lines = content.split("\n");
+  const keySlugger = new GithubSlugger();
+  const chunkSlugger = new GithubSlugger();
+  const map: Record<string, string> = {};
+  let currentChunkId = "preamble";
+  let inCode = false;
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) continue;
+    const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!m) continue;
+    const text = m[2].trim() || "section";
+    const key = keySlugger.slug(text);
+    if (m[1].length === 1) currentChunkId = chunkSlugger.slug(text);
+    map[key] = currentChunkId;
+  }
+  return map;
 }

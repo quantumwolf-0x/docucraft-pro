@@ -26,6 +26,8 @@ export interface PersistedUI {
   sidebarCollapsed: boolean;
   scrollTop: number;
   fileOrder?: string[];
+  /** File ids in most-recently-opened order — drives the "Recent" chip. */
+  recentFileIds?: string[];
 }
 
 import type { Highlight } from "./dom-highlighter";
@@ -127,7 +129,14 @@ export const persistence = {
 };
 
 export function emptyUI(): PersistedUI {
-  return { activeFileId: null, expanded: {}, sidebarCollapsed: false, scrollTop: 0, fileOrder: [] };
+  return {
+    activeFileId: null,
+    expanded: {},
+    sidebarCollapsed: false,
+    scrollTop: 0,
+    fileOrder: [],
+    recentFileIds: [],
+  };
 }
 
 export function newWorkspaceRecord(name: string): WorkspaceRecord {
@@ -257,6 +266,7 @@ export function parseWorkspaceImport(json: string): WorkspaceRecord {
       sidebarCollapsed: typeof w.ui?.sidebarCollapsed === "boolean" ? w.ui.sidebarCollapsed : false,
       scrollTop: typeof w.ui?.scrollTop === "number" ? w.ui.scrollTop : 0,
       fileOrder: Array.isArray(w.ui?.fileOrder) ? w.ui.fileOrder : [],
+      recentFileIds: Array.isArray(w.ui?.recentFileIds) ? w.ui.recentFileIds : [],
     },
   };
 }

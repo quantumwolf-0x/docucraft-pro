@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Plus, Download, Upload, Trash2, Check, FolderOpen, Share } from "lucide-react";
+import { ChevronDown, PlusCircle, Download, Upload, Trash2, Check, FolderOpen, Users, Layers } from "lucide-react";
 
 interface WorkspaceLite {
   id: string;
   name: string;
+  docCount?: number;
 }
 
 interface Props {
@@ -15,6 +16,10 @@ interface Props {
   onImport: (file: File) => void;
   onExport: () => void;
   onShare: () => void;
+  /** "pill" = compact header trigger; "sidebar" = full-width logo + name + doc count. */
+  variant?: "pill" | "sidebar";
+  /** Number of docs in the current workspace — shown by the sidebar variant. */
+  docCount?: number;
 }
 
 export function WorkspaceMenu({
@@ -26,6 +31,8 @@ export function WorkspaceMenu({
   onImport,
   onExport,
   onShare,
+  variant = "pill",
+  docCount = 0,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -66,53 +73,98 @@ export function WorkspaceMenu({
     setOpen(false);
   };
 
+  const sidebar = variant === "sidebar";
+
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-8 max-w-[180px] items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Workspaces"
-      >
-        <FolderOpen className="h-4 w-4 shrink-0" />
-        <span className="truncate">{current?.name ?? "Workspace"}</span>
-        <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
-      </button>
+    <div ref={rootRef} className={`relative ${sidebar ? "min-w-0 flex-1 z-50" : ""}`}>
+      {sidebar ? (
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center rounded-lg px-2 py-1.5 text-left bg-background transition-colors hover:bg-accent"
+          title="Workspaces"
+        >
+          <span className="min-w-0">
+            <span className="flex min-w-0 items-center gap-1">
+              <span className="truncate text-sm font-semibold text-foreground">
+                {current?.name ?? "Workspace"}
+              </span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground opacity-70" />
+            </span>
+          </span>
+        </button>
+      ) : (
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="inline-flex h-8 max-w-[180px] items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="Workspaces"
+        >
+          <FolderOpen className="h-4 w-4 shrink-0" />
+          <span className="truncate">{current?.name ?? "Workspace"}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+        </button>
+      )}
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-64 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
-          <div className="max-h-56 overflow-y-auto p-1">
-            {workspaces.map((w) => (
-              <div
-                key={w.id}
-                className="group flex items-center gap-1 rounded-md hover:bg-accent"
-              >
+        <div
+          className={`absolute top-full z-50 mt-1.5 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl ${
+            sidebar ? "left-0 w-[280px]" : "right-0 w-[280px]"
+          }`}
+        >
+          <div className="max-h-[70vh] overflow-y-auto p-2">
+            {current && (
+              <div className="group relative mb-2 flex items-center justify-between rounded-xl bg-accent p-2 transition-colors hover:bg-accent/80">
                 <button
-                  onClick={() => {
-                    onSwitch(w.id);
-                    setOpen(false);
-                  }}
-                  className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
+                  onClick={() => setOpen(false)}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 >
-                  <Check
-                    className={`h-3.5 w-3.5 shrink-0 ${w.id === currentId ? "text-primary" : "opacity-0"}`}
-                  />
-                  <span className="truncate">{w.name}</span>
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-background">
+                    <Layers className="h-4 w-4 text-foreground" strokeWidth={1.5} />
+                  </div>
+                  <div className="flex flex-col items-start min-w-0">
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {current.name}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {current.docCount ?? 0} docs
+                    </span>
+                  </div>
                 </button>
-                {workspaces.length > 1 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDelete(w.id);
-                    }}
-                    className="mr-1 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100"
-                    aria-label={`Delete ${w.name}`}
-                    title="Delete workspace"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-                  </button>
-                )}
+                <Check className="mr-2 h-4 w-4 shrink-0 text-foreground" />
               </div>
-            ))}
+            )}
+
+            {workspaces.length > 1 && (
+              <div className="flex flex-col gap-0.5">
+                  {workspaces
+                    .filter((w) => w.id !== currentId)
+                    .map((w) => (
+                      <div
+                        key={w.id}
+                        className="group relative flex items-center rounded-xl p-2 transition-colors hover:bg-accent"
+                      >
+                        <button
+                          onClick={() => {
+                            onSwitch(w.id);
+                            setOpen(false);
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                        >
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]">
+                            <FolderOpen className="h-4 w-4 text-muted-foreground" strokeWidth={1.5} />
+                          </div>
+                          <div className="flex flex-col items-start min-w-0">
+                            <span className="truncate text-sm font-medium text-foreground">
+                              {w.name}
+                            </span>
+                            <span className="truncate text-xs text-muted-foreground">
+                              {w.docCount ?? 0} docs
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    ))}
+              </div>
+            )}
           </div>
 
           {creating && (
@@ -145,16 +197,18 @@ export function WorkspaceMenu({
             </div>
           )}
 
-          <div className="grid grid-cols-4 gap-1 border-t border-border p-1">
+          <div className="flex border-t border-border bg-muted/50">
             {!creating && (
-              <ActionButton
-                icon={Plus}
-                label="New"
-                onClick={() => {
-                  setCreating(true);
-                  setNewName("");
-                }}
-              />
+              <>
+                <ActionButton
+                  icon={PlusCircle}
+                  label="New"
+                  onClick={() => {
+                    setCreating(true);
+                    setNewName("");
+                  }}
+                />
+              </>
             )}
             <ActionButton icon={Upload} label="Import" onClick={() => fileRef.current?.click()} />
             <ActionButton
@@ -166,7 +220,7 @@ export function WorkspaceMenu({
               }}
             />
             <ActionButton
-              icon={Share}
+              icon={Users}
               label="Share"
               onClick={() => {
                 onShare();
@@ -200,16 +254,16 @@ function ActionButton({
   label,
   onClick,
 }: {
-  icon: typeof Plus;
+  icon: any;
   label: string;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex flex-col items-center gap-1 rounded-md px-1 py-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      className="flex flex-1 flex-col items-center justify-center gap-1.5 py-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
-      <Icon className="h-4 w-4" />
+      <Icon className="h-4 w-4" strokeWidth={1.5} />
       {label}
     </button>
   );

@@ -30,8 +30,8 @@
     "semantic_hash": ""
   },
   "src/components/docs/DocsApp.tsx": {
-    "mtime": 1785002208.7014792,
-    "ast_hash": "4b2eee9e9e74788adcf282a0c23d66d3",
+    "mtime": 1785007088.4820065,
+    "ast_hash": "72c2f4da936b763dfa1a2b2ffe355de1",
     "semantic_hash": ""
   },
   "src/components/docs/DocumentViewer.tsx": {
@@ -55,8 +55,8 @@
     "semantic_hash": ""
   },
   "src/components/docs/MarkdownViewer.tsx": {
-    "mtime": 1784989673.4048693,
-    "ast_hash": "f0e7614783b2b00585a9d5826d59bb27",
+    "mtime": 1785006720.140711,
+    "ast_hash": "2fdc71c8c54803c0e564e675e20cac16",
     "semantic_hash": ""
   },
   "src/components/docs/Mermaid.tsx": {
@@ -70,13 +70,13 @@
     "semantic_hash": ""
   },
   "src/components/docs/Sidebar.tsx": {
-    "mtime": 1785002139.2202008,
-    "ast_hash": "9b1c271414d575d70ab2cc58d4fe8d72",
+    "mtime": 1785006278.7594378,
+    "ast_hash": "4de379e3d6d490cd79b2e0928288a0df",
     "semantic_hash": ""
   },
   "src/components/docs/WorkspaceMenu.tsx": {
-    "mtime": 1785000410.4820743,
-    "ast_hash": "7eccbb8875957b20e499ab4a8a42d86a",
+    "mtime": 1785004760.0257266,
+    "ast_hash": "e95021c3f5db11835a0cc15a2e9dc526",
     "semantic_hash": ""
   },
   "src/components/docs/ai/AiSettings.tsx": {
@@ -425,8 +425,8 @@
     "semantic_hash": ""
   },
   "src/lib/persistence.ts": {
-    "mtime": 1784992943.4175398,
-    "ast_hash": "91330bab098e23d96e82b33fe73201a2",
+    "mtime": 1785002399.3792567,
+    "ast_hash": "cf47dd04e4650139553d5425eb6eb00c",
     "semantic_hash": ""
   },
   "src/lib/share.ts": {
@@ -550,8 +550,8 @@
     "semantic_hash": ""
   },
   "src/components/docs/WorkspaceSheet.tsx": {
-    "mtime": 1784990534.2151155,
-    "ast_hash": "8a4b632b8f4b15bcdbb4083e3dce1905",
+    "mtime": 1785002911.0338428,
+    "ast_hash": "b1ffd5cd1fa37780df8e9a4ddcc33411",
     "semantic_hash": ""
   },
   "src/lib/storage-limits.ts": {
@@ -567,6 +567,11 @@
   "public/Workspace_menu.png": {
     "mtime": 1785001734.6771379,
     "ast_hash": "1eb80619bbe025cd4aae041fc6149563",
+    "semantic_hash": ""
+  },
+  "public/Nav.png": {
+    "mtime": 1785005225.013684,
+    "ast_hash": "899b948dc52d8d035526ab09e92a1718",
     "semantic_hash": ""
   }
 }

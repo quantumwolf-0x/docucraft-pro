@@ -1,16 +1,16 @@
-# Graph Report - docucraft-pro  (2026-07-25)
+# Graph Report - docucraft-pro  (2026-07-26)
 
 ## Corpus Check
-- 112 files · ~124,897 words
+- 110 files · ~109,075 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 802 nodes · 1332 edges · 57 communities (52 shown, 5 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 10 edges (avg confidence: 0.53)
+- 799 nodes · 1333 edges · 55 communities (52 shown, 3 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 9 edges (avg confidence: 0.53)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `7ecb4927`
+- Built from commit: `3410586d`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -30,18 +30,18 @@
 - compilerOptions
 - components.json
 - SettingsPage.tsx
-- Mermaid.tsx
+- Sidebar.tsx
 - sheet.tsx
-- cn
+- persistence.ts
 - command.tsx
 - menubar.tsx
 - AskAiPanel.tsx
 - workspace-artifacts.ts
-- Sidebar.tsx
-- persistence.ts
-- document-utils.ts
-- markdown-utils.ts
 - InteractiveBlock.tsx
+- persistence.ts
+- workspace-artifacts.ts
+- markdown-utils.ts
+- sheet.tsx
 - context.ts
 - context-menu.tsx
 - alert-dialog.tsx
@@ -49,13 +49,13 @@
 - breadcrumb.tsx
 - drawer.tsx
 - navigation-menu.tsx
-- select.tsx
+- Sidebar.tsx
 - card.tsx
 - toggle-group.tsx
 - input-otp.tsx
-- HomePage.tsx
-- WorkspaceMenu.tsx
-- accordion.tsx
+- persistence.ts
+- carousel.tsx
+- document-utils.ts
 - avatar.tsx
 - chart.tsx
 - tabs.tsx
@@ -63,21 +63,19 @@
 - Routes
 - babel-standalone.d.ts
 - badge.tsx
-- input.tsx
-- tooltip.tsx
 - mammoth.browser.d.ts
 
 ## God Nodes (most connected - your core abstractions)
 1. `cn()` - 69 edges
-2. `DocsApp()` - 23 edges
+2. `DocsApp()` - 21 edges
 3. `DocuCraft Pro — One-Shot Build Prompt` - 18 edges
-4. `MdFile` - 17 edges
-5. `compilerOptions` - 17 edges
-6. `MarkdownViewer()` - 16 edges
+4. `MarkdownViewer()` - 17 edges
+5. `MdFile` - 17 edges
+6. `compilerOptions` - 17 edges
 7. `getDocumentKind()` - 16 edges
 8. `runAgent()` - 14 edges
-9. `splitIntoSubtopics()` - 12 edges
-10. `Highlight` - 11 edges
+9. `Highlight` - 11 edges
+10. `splitIntoSubtopics()` - 11 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `PresentationViewer()` --references--> `jszip`  [EXTRACTED]
@@ -94,7 +92,7 @@
 ## Import Cycles
 - None detected.
 
-## Communities (57 total, 5 thin omitted)
+## Communities (55 total, 3 thin omitted)
 
 ### Community 0 - "dependencies"
 Cohesion: 0.03
@@ -114,15 +112,15 @@ Nodes (28): devDependencies, eslint, eslint-config-prettier, @eslint/js, eslint-
 
 ### Community 4 - "MarkdownViewer.tsx"
 Cohesion: 0.09
-Nodes (34): mermaid, EmbeddedMarkdown(), Lightbox(), Callout(), CALLOUT_MAP, CodeBlock(), extractText(), HeadingLink() (+26 more)
+Nodes (33): Lightbox(), Callout(), CALLOUT_MAP, CodeBlock(), extractText(), HeadingLink(), MarkdownViewer(), remarkInteractiveBlockMeta() (+25 more)
 
 ### Community 5 - "sidebar.tsx"
 Cohesion: 0.07
-Nodes (27): Separator, Sidebar, SidebarContent, SidebarContext, SidebarContextProps, SidebarFooter, SidebarGroup, SidebarGroupAction (+19 more)
+Nodes (29): Input, Separator, Sidebar, SidebarContent, SidebarContext, SidebarContextProps, SidebarFooter, SidebarGroup (+21 more)
 
 ### Community 6 - "DocumentViewer.tsx"
-Cohesion: 0.12
-Nodes (15): jszip, xlsx, decodeXml(), DocxViewer(), extractLegacyPptSlides(), GoogleProps, GoogleViewer(), MammothBrowser (+7 more)
+Cohesion: 0.13
+Nodes (23): AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter(), AlertDialogHeader(), AlertDialogOverlay, AlertDialogTitle (+15 more)
 
 ### Community 7 - "types.ts"
 Cohesion: 0.13
@@ -130,7 +128,7 @@ Nodes (15): DefaultModel(), geminiProvider, openaiProvider, allModels(), PROVIDE
 
 ### Community 8 - "utils.ts"
 Cohesion: 0.08
-Nodes (15): Alert, AlertDescription, AlertTitle, alertVariants, Checkbox, HoverCardContent, PopoverContent, Progress (+7 more)
+Nodes (14): Badge(), BadgeProps, badgeVariants, Checkbox, HoverCardContent, PopoverContent, Progress, RadioGroup (+6 more)
 
 ### Community 9 - "keys.ts"
 Cohesion: 0.18
@@ -141,8 +139,8 @@ Cohesion: 0.20
 Nodes (21): AiSettings(), AskArgs, useAI(), AgentInput, AgentResult, asAIError(), defaultPreference(), exhaustionError() (+13 more)
 
 ### Community 11 - "DocsApp.tsx"
-Cohesion: 0.15
-Nodes (17): clampWidth(), DocsApp(), loadSidebarWidth(), Theme, WorkspaceLite, HighlightsOnlyModal(), readingMinutes(), loadPrefs() (+9 more)
+Cohesion: 0.11
+Nodes (17): HighlightsOnlyModal(), Props, READER_THEME_META, READING_FONT_META, READING_MODE_META, SettingsPage(), SettingsPageProps, StorageSettings() (+9 more)
 
 ### Community 12 - "compilerOptions"
 Cohesion: 0.10
@@ -153,20 +151,20 @@ Cohesion: 0.11
 Nodes (18): aliases, components, hooks, lib, ui, utils, iconLibrary, registries (+10 more)
 
 ### Community 14 - "SettingsPage.tsx"
-Cohesion: 0.18
-Nodes (11): DEFAULT_VIEW, Props, Sidebar(), SidebarView, fileLabel(), Highlight, WorkspaceRecord, ChapterProgress (+3 more)
+Cohesion: 0.40
+Nodes (4): Alert, AlertDescription, AlertTitle, alertVariants
 
-### Community 15 - "Mermaid.tsx"
-Cohesion: 0.16
-Nodes (13): DARK_THEMES, DEFAULT_PREFS, emptyUI(), isDarkTheme(), newWorkspaceRecord(), openDb(), PersistedFile, PersistedUI (+5 more)
+### Community 15 - "Sidebar.tsx"
+Cohesion: 0.36
+Nodes (5): mermaid, configure(), Mermaid(), quoteErEntities(), renderMermaid()
 
 ### Community 16 - "sheet.tsx"
 Cohesion: 0.20
 Nodes (9): DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuShortcut(), DropdownMenuSubContent (+1 more)
 
-### Community 17 - "cn"
+### Community 17 - "persistence.ts"
 Cohesion: 0.50
-Nodes (3): CommandPalette(), Hit, Props
+Nodes (3): AccordionContent, AccordionItem, AccordionTrigger
 
 ### Community 18 - "command.tsx"
 Cohesion: 0.12
@@ -184,25 +182,25 @@ Nodes (11): AskAiFile, AskAiPanel(), AskAiPrefill, ContextMode, defaultDocName()
 Cohesion: 0.10
 Nodes (20): 10. Bookmarks & library, 11. Workspaces (multi-project organization), 12. Ask AI (bring-your-own-key, private), 13. Settings page (`/settings`, tabbed), 14. Personalization & niceties, 15. Responsive & accessibility, 16. Privacy & guarantees (state these in the UI), 17. Routes (+12 more)
 
-### Community 22 - "Sidebar.tsx"
-Cohesion: 0.14
-Nodes (12): READER_THEME_META, READING_FONT_META, READING_MODE_META, SettingsPage(), SettingsPageProps, StorageSettings(), ReadingFont, ReadingMode (+4 more)
-
-### Community 23 - "persistence.ts"
-Cohesion: 0.13
-Nodes (23): AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter(), AlertDialogHeader(), AlertDialogOverlay, AlertDialogTitle (+15 more)
-
-### Community 24 - "document-utils.ts"
-Cohesion: 0.40
-Nodes (3): Props, WorkspaceLite, WorkspaceMenu()
-
-### Community 25 - "markdown-utils.ts"
-Cohesion: 0.12
-Nodes (29): DocumentViewer(), PdfViewer(), ViewerFrame(), InlineArtifact(), Props, renderArtifact(), useObjectUrl(), Props (+21 more)
-
-### Community 26 - "InteractiveBlock.tsx"
+### Community 22 - "InteractiveBlock.tsx"
 Cohesion: 0.23
 Nodes (9): htmlDocument(), InteractiveBlock(), InteractiveBlockProps, InteractiveKind, interactiveMode, RuntimeError, toRuntimeError(), ResizableHandle() (+1 more)
+
+### Community 23 - "persistence.ts"
+Cohesion: 0.18
+Nodes (15): clampWidth(), DocsApp(), loadSidebarWidth(), Theme, WorkspaceLite, readingMinutes(), loadPrefs(), parseWorkspaceImport() (+7 more)
+
+### Community 24 - "workspace-artifacts.ts"
+Cohesion: 0.19
+Nodes (19): DocumentViewer(), ViewerFrame(), EmbeddedMarkdown(), InlineArtifact(), Props, renderArtifact(), fileExtension(), getDocumentKind() (+11 more)
+
+### Community 25 - "markdown-utils.ts"
+Cohesion: 0.11
+Nodes (18): jszip, xlsx, decodeXml(), DocxViewer(), extractLegacyPptSlides(), GoogleProps, GoogleViewer(), MammothBrowser (+10 more)
+
+### Community 26 - "sheet.tsx"
+Cohesion: 0.19
+Nodes (11): Props, WorkspaceLite, WorkspaceSheet(), SheetContent, SheetContentProps, SheetDescription, SheetFooter(), SheetHeader() (+3 more)
 
 ### Community 27 - "context.ts"
 Cohesion: 0.33
@@ -232,9 +230,9 @@ Nodes (6): DrawerContent, DrawerDescription, DrawerFooter(), DrawerHeader(), Dra
 Cohesion: 0.25
 Nodes (7): NavigationMenu, NavigationMenuContent, NavigationMenuIndicator, NavigationMenuList, NavigationMenuTrigger, navigationMenuTriggerStyle, NavigationMenuViewport
 
-### Community 34 - "select.tsx"
-Cohesion: 0.25
-Nodes (7): SelectContent, SelectItem, SelectLabel, SelectScrollDownButton, SelectScrollUpButton, SelectSeparator, SelectTrigger
+### Community 34 - "Sidebar.tsx"
+Cohesion: 0.16
+Nodes (10): DEFAULT_VIEW, KIND_ICON, kindIcon(), Sidebar(), SidebarView, Props, WorkspaceLite, WorkspaceMenu() (+2 more)
 
 ### Community 35 - "card.tsx"
 Cohesion: 0.29
@@ -248,17 +246,17 @@ Nodes (5): ToggleGroup, ToggleGroupContext, ToggleGroupItem, Toggle, toggleVaria
 Cohesion: 0.33
 Nodes (5): input-otp, InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot
 
-### Community 38 - "HomePage.tsx"
-Cohesion: 0.19
-Nodes (11): Props, WorkspaceLite, WorkspaceSheet(), SheetContent, SheetContentProps, SheetDescription, SheetFooter(), SheetHeader() (+3 more)
+### Community 38 - "persistence.ts"
+Cohesion: 0.16
+Nodes (13): DARK_THEMES, DEFAULT_PREFS, emptyUI(), isDarkTheme(), newWorkspaceRecord(), openDb(), PersistedFile, PersistedUI (+5 more)
 
-### Community 40 - "WorkspaceMenu.tsx"
+### Community 40 - "carousel.tsx"
 Cohesion: 0.15
 Nodes (12): Carousel, CarouselApi, CarouselContent, CarouselContext, CarouselContextProps, CarouselItem, CarouselNext, CarouselOptions (+4 more)
 
-### Community 41 - "accordion.tsx"
-Cohesion: 0.50
-Nodes (3): AccordionContent, AccordionItem, AccordionTrigger
+### Community 41 - "document-utils.ts"
+Cohesion: 0.27
+Nodes (9): dataUrl(), importDocumentFile(), isTextKind(), kindByExtension, MdChunk, MdHeading, parseHeadings(), splitIntoSubtopics() (+1 more)
 
 ### Community 42 - "avatar.tsx"
 Cohesion: 0.50
@@ -277,25 +275,25 @@ Cohesion: 0.29
 Nodes (6): react, useCarousel(), useChart(), useFormField(), useSidebar(), useIsMobile()
 
 ### Community 48 - "badge.tsx"
-Cohesion: 0.67
-Nodes (3): Badge(), BadgeProps, badgeVariants
+Cohesion: 0.50
+Nodes (3): CommandPalette(), Hit, Props
 
 ## Knowledge Gaps
-- **378 isolated node(s):** `$schema`, `style`, `rsc`, `tsx`, `css` (+373 more)
+- **374 isolated node(s):** `$schema`, `style`, `rsc`, `tsx`, `css` (+369 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **5 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **3 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `cn()` connect `persistence.ts` to `carousel.tsx`, `sidebar.tsx`, `utils.ts`, `sheet.tsx`, `command.tsx`, `menubar.tsx`, `InteractiveBlock.tsx`, `context-menu.tsx`, `table.tsx`, `breadcrumb.tsx`, `drawer.tsx`, `navigation-menu.tsx`, `select.tsx`, `card.tsx`, `toggle-group.tsx`, `input-otp.tsx`, `HomePage.tsx`, `WorkspaceMenu.tsx`, `accordion.tsx`, `avatar.tsx`, `chart.tsx`, `tabs.tsx`, `badge.tsx`, `input.tsx`, `tooltip.tsx`?**
-  _High betweenness centrality (0.275) - this node is a cross-community bridge._
-- **Why does `dependencies` connect `dependencies` to `routeTree.gen.ts`, `devDependencies`, `MarkdownViewer.tsx`, `input-otp.tsx`, `DocumentViewer.tsx`, `react`?**
-  _High betweenness centrality (0.209) - this node is a cross-community bridge._
-- **Why does `SheetHeader()` connect `HomePage.tsx` to `sidebar.tsx`, `persistence.ts`?**
-  _High betweenness centrality (0.074) - this node is a cross-community bridge._
+- **Why does `cn()` connect `DocumentViewer.tsx` to `carousel.tsx`, `MarkdownViewer.tsx`, `sidebar.tsx`, `utils.ts`, `SettingsPage.tsx`, `sheet.tsx`, `persistence.ts`, `command.tsx`, `menubar.tsx`, `InteractiveBlock.tsx`, `sheet.tsx`, `context-menu.tsx`, `table.tsx`, `breadcrumb.tsx`, `drawer.tsx`, `navigation-menu.tsx`, `card.tsx`, `toggle-group.tsx`, `input-otp.tsx`, `carousel.tsx`, `avatar.tsx`, `chart.tsx`, `tabs.tsx`?**
+  _High betweenness centrality (0.247) - this node is a cross-community bridge._
+- **Why does `dependencies` connect `dependencies` to `routeTree.gen.ts`, `devDependencies`, `input-otp.tsx`, `react`, `Sidebar.tsx`, `markdown-utils.ts`?**
+  _High betweenness centrality (0.208) - this node is a cross-community bridge._
+- **Why does `react` connect `react` to `dependencies`, `DocumentViewer.tsx`?**
+  _High betweenness centrality (0.051) - this node is a cross-community bridge._
 - **What connects `$schema`, `style`, `rsc` to the rest of the system?**
-  _378 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _374 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `dependencies` be split into smaller, more focused modules?**
   _Cohesion score 0.030303030303030304 - nodes in this community are weakly interconnected._
 - **Should `routeTree.gen.ts` be split into smaller, more focused modules?**

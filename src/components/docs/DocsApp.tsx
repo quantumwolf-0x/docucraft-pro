@@ -13,6 +13,7 @@ import {
   Undo2,
   Home,
   Upload,
+  Settings,
 } from "lucide-react";
 
 import { Sidebar, DEFAULT_VIEW, type SidebarView } from "./Sidebar";
@@ -23,12 +24,12 @@ import { SettingsPage } from "./SettingsPage";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { WorkspaceSheet } from "./WorkspaceSheet";
 import { HighlightsOnlyModal } from "./HighlightsOnlyModal";
+import { AskAiPanel, type AskAiPrefill } from "./ai/AskAiPanel";
 import type { MdFile, MdChunk } from "@/lib/markdown-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
 import { parseHeadings, readingMinutes, splitIntoSubtopics } from "@/lib/markdown-utils";
 import { getDocumentKind, importDocumentFile, SUPPORTED_ACCEPT } from "@/lib/document-utils";
 import { clearArtifactResolutionCache } from "@/lib/workspace-artifacts";
-import { useReadingProgress, pickResume } from "@/lib/reading-progress";
 import { toast } from "sonner";
 import {
   persistence,
@@ -65,6 +66,7 @@ function loadSidebarWidth(): number {
 interface WorkspaceLite {
   id: string;
   name: string;
+  docCount?: number;
 }
 
 export function DocsApp() {
@@ -81,6 +83,8 @@ export function DocsApp() {
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // File ids in most-recently-opened order — drives the "Recent" chip.
+  const [recentFileIds, setRecentFileIds] = useState<string[]>([]);
 
   // Persistence-facing state.
   const [booting, setBooting] = useState(true);
@@ -92,6 +96,9 @@ export function DocsApp() {
   // File whose highlights are shown in isolation via the "Show highlights only"
   // menu item; null when the modal is closed.
   const [highlightsOnlyFileId, setHighlightsOnlyFileId] = useState<string | null>(null);
+  // Ask AI panel: open state + the selection/action it was seeded from.
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrefill, setAiPrefill] = useState<AskAiPrefill | null>(null);
   // Sidebar chip + sort state, shared across the desktop header, the mobile
   // chip row, and the mobile three-dots menu (rendered outside <Sidebar>).
   const [sidebarView, setSidebarView] = useState<SidebarView>(DEFAULT_VIEW);
@@ -118,9 +125,20 @@ export function DocsApp() {
     sidebarCollapsed,
     bookmarks,
     highlights,
+    recentFileIds,
   });
-  snapshotRef.current = { files, activeFileId, expanded, sidebarCollapsed, bookmarks, highlights };
+  snapshotRef.current = {
+    files,
+    activeFileId,
+    expanded,
+    sidebarCollapsed,
+    bookmarks,
+    highlights,
+    recentFileIds,
+  };
   const scrollRef = useRef(0);
+  const activeFileNameRef = useRef<string | null>(null);
+  const readingModeRef = useRef(readingMode);
   const workspaceIdRef = useRef<string | null>(null);
   const workspaceNameRef = useRef("My workspace");
   const createdAtRef = useRef(Date.now());
@@ -128,8 +146,6 @@ export function DocsApp() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoredFlash = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const { map: progress, touch } = useReadingProgress();
 
   useEffect(() => {
     widthRef.current = sidebarWidth;
@@ -141,16 +157,24 @@ export function DocsApp() {
   useEffect(() => {
     const wrap = sidebarWrapRef.current;
     if (!wrap) return;
-    const target = sidebarCollapsed ? 0 : widthRef.current;
+    const target = sidebarCollapsed ? 56 : widthRef.current;
     if (firstCollapseRun.current) {
       gsap.set(wrap, { width: target });
+      if (sidebarInnerRef.current)
+        gsap.set(sidebarInnerRef.current, {
+          autoAlpha: sidebarCollapsed ? 0 : 1,
+          x: sidebarCollapsed ? -16 : 0,
+        });
       firstCollapseRun.current = false;
     } else {
       gsap.to(wrap, { width: target, duration: 0.45, ease: "power3.inOut" });
     }
     if (sidebarInnerRef.current) {
       gsap.to(sidebarInnerRef.current, {
-        opacity: sidebarCollapsed ? 0 : 1,
+        // autoAlpha (opacity + visibility) so the hidden full sidebar drops out
+        // of hit-testing — plain opacity:0 stays clickable and its Search / Add
+        // Files buttons fire through the collapsed icon rail.
+        autoAlpha: sidebarCollapsed ? 0 : 1,
         x: sidebarCollapsed ? -16 : 0,
         duration: sidebarCollapsed ? 0.25 : 0.4,
         ease: "power2.out",
@@ -240,6 +264,7 @@ export function DocsApp() {
         sidebarCollapsed: s.sidebarCollapsed,
         scrollTop: scrollRef.current,
         fileOrder: s.files.map((f) => f.id),
+        recentFileIds: s.recentFileIds,
       },
     };
   }, []);
@@ -300,6 +325,7 @@ export function DocsApp() {
 
     setFiles(parsed);
     setActiveFileId(ws.ui?.activeFileId ?? parsed[0]?.id ?? null);
+    setRecentFileIds(ws.ui?.recentFileIds ?? []);
     setExpanded(ws.ui?.expanded ?? {});
     setSidebarCollapsed(!!ws.ui?.sidebarCollapsed);
     setBookmarks(ws.bookmarks ?? []);
@@ -324,7 +350,7 @@ export function DocsApp() {
   const refreshWorkspaceList = useCallback(async () => {
     const list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
     list.sort((a, b) => a.createdAt - b.createdAt);
-    setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
+    setWorkspaces(list.map((w) => ({ id: w.id, name: w.name, docCount: w.files?.length || 0 })));
   }, []);
 
   // Restore the previous session on first load.
@@ -379,7 +405,7 @@ export function DocsApp() {
           const ws = hashSharedWs || (list.find((w) => w.id === prefs.lastWorkspaceId) ?? list[0]);
           if (!alive) return;
           list.sort((a, b) => a.createdAt - b.createdAt);
-          setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
+          setWorkspaces(list.map((w) => ({ id: w.id, name: w.name, docCount: w.files?.length || 0 })));
           hydrateWorkspace(ws);
           savePrefs({ lastWorkspaceId: ws.id });
         }
@@ -402,10 +428,13 @@ export function DocsApp() {
       scrollRef.current = window.scrollY;
       if (!hydratedRef.current) return;
       if (scrollTimer.current) clearTimeout(scrollTimer.current);
-      scrollTimer.current = setTimeout(() => void persistNow(true), 1200);
+      scrollTimer.current = setTimeout(() => {
+        void persistNow(true);
+      }, 1200);
     };
     const flush = () => {
-      if (hydratedRef.current) void persistNow(true);
+      if (!hydratedRef.current) return;
+      void persistNow(true);
     };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") flush();
@@ -468,15 +497,9 @@ export function DocsApp() {
         );
 
         const nextFiles = [...snapshotRef.current.files, ...parsed];
-        const resumeName = snapshotRef.current.activeFileId
-          ? null
-          : pickResume(
-              parsed.map((f) => f.name),
-              progress,
-            );
-        const resume = resumeName ? parsed.find((f) => f.name === resumeName) : null;
-        const nextActiveFileId =
-          snapshotRef.current.activeFileId ?? (resume ?? parsed[0])?.id ?? null;
+        // Keep the currently open file if one is open; otherwise open the first
+        // of the just-uploaded batch.
+        const nextActiveFileId = snapshotRef.current.activeFileId ?? parsed[0]?.id ?? null;
 
         if (!workspaceIdRef.current) {
           const id = crypto.randomUUID();
@@ -484,7 +507,7 @@ export function DocsApp() {
           workspaceNameRef.current = "My workspace";
           createdAtRef.current = Date.now();
           setWorkspaceId(id);
-          setWorkspaces([{ id, name: workspaceNameRef.current }]);
+          setWorkspaces([{ id, name: workspaceNameRef.current, docCount: 1 }]);
           savePrefs({ lastWorkspaceId: id });
         }
 
@@ -510,7 +533,7 @@ export function DocsApp() {
         toast.error("Could not upload the selected file(s). Please try again.", { id: toastId });
       }
     },
-    [buildRecord, navigate, progress],
+    [buildRecord, navigate],
   );
 
   const handleFileInput = useCallback(
@@ -557,6 +580,8 @@ export function DocsApp() {
   }, [handleFileInput]);
 
   const activeFile = files.find((f) => f.id === activeFileId) ?? null;
+  activeFileNameRef.current = activeFile?.name ?? null;
+  readingModeRef.current = readingMode;
   const workspaceRevision = files
     .map((file) => `${file.id}:${file.name}:${file.content.length}:${file.data?.length ?? 0}`)
     .join("|");
@@ -771,9 +796,16 @@ export function DocsApp() {
     }
   }, [activeFileId]);
 
+  // Track most-recently-opened files for the "Recent" chip. Every open path
+  // sets activeFileId, so keying on it captures them all. Persisted to IndexedDB.
   useEffect(() => {
-    if (activeFile) touch(activeFile.name);
-  }, [activeFileId, activeFile, touch]);
+    if (!activeFileId) return;
+    setRecentFileIds((prev) => {
+      if (prev[0] === activeFileId) return prev;
+      return [activeFileId, ...prev.filter((id) => id !== activeFileId)].slice(0, 30);
+    });
+    markDirty();
+  }, [activeFileId, markDirty]);
 
   const cycleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
@@ -886,7 +918,7 @@ export function DocsApp() {
         list = [ws];
       }
       list.sort((a, b) => a.createdAt - b.createdAt);
-      setWorkspaces(list.map((w) => ({ id: w.id, name: w.name })));
+      setWorkspaces(list.map((w) => ({ id: w.id, name: w.name, docCount: w.files?.length || 0 })));
       if (id === workspaceIdRef.current) {
         hydrateWorkspace(list[0]);
         savePrefs({ lastWorkspaceId: list[0].id });
@@ -951,6 +983,52 @@ export function DocsApp() {
 
   const goHome = useCallback(() => navigate({ to: "/" }), [navigate]);
   const openSettings = useCallback(() => navigate({ to: "/settings" }), [navigate]);
+
+  // Ask AI: opened either from the sidebar (no prefill) or from a text-selection
+  // quick action in the reader (seeded with the selection + chosen action).
+  const openAskAi = useCallback(() => {
+    setAiPrefill(null);
+    setAiOpen(true);
+  }, []);
+  const askAiFromSelection = useCallback((prefill: AskAiPrefill) => {
+    setAiPrefill(prefill);
+    setAiOpen(true);
+  }, []);
+
+  // Append AI output to the open document, or spin it out into a new one.
+  const insertAiOutput = useCallback(
+    (markdown: string) => {
+      const target = snapshotRef.current.activeFileId;
+      const file = snapshotRef.current.files.find((f) => f.id === target);
+      if (!file) return;
+      handleContentChange(file.id, `${file.content}\n\n${markdown}`);
+      toast.success("Inserted into document");
+    },
+    [handleContentChange],
+  );
+  const createAiDoc = useCallback(
+    (name: string, content: string) => {
+      const id = `${name}-${crypto.randomUUID().slice(0, 8)}`;
+      const doc: MdFile = {
+        id,
+        name,
+        content,
+        mimeType: "text/markdown",
+        size: content.length,
+        addedAt: Date.now(),
+        kind: "markdown",
+        headings: parseHeadings(content, id),
+        subtopics: splitIntoSubtopics(content, name),
+      };
+      setFiles((prev) => [...prev, doc]);
+      setActiveFileId(id);
+      setAiOpen(false);
+      if (location.pathname !== "/") navigate({ to: "/" });
+      markDirty();
+      toast.success("Created new document");
+    },
+    [location.pathname, navigate, markDirty],
+  );
 
   const openWorkspaceFromHome = useCallback(
     async (id: string) => {
@@ -1049,6 +1127,7 @@ export function DocsApp() {
   return (
     <div className="min-h-dvh bg-background">
         <Header
+          hideOnDesktop
           theme={theme}
           onCycleTheme={cycleTheme}
           onMenu={() => setDrawerOpen(true)}
@@ -1079,14 +1158,14 @@ export function DocsApp() {
       <div className="flex">
         <div
           ref={sidebarWrapRef}
-          className="sticky top-16 hidden h-[calc(100dvh-4rem)] shrink-0 overflow-hidden border-r border-border md:block md:portrait:hidden"
+          className="sticky top-0 hidden h-dvh shrink-0 border-r border-border bg-background md:block md:portrait:hidden relative"
         >
           <div ref={sidebarInnerRef} className="h-full" style={{ width: sidebarWidth }}>
             <Sidebar
               files={files}
               activeFileId={activeFileId}
               activeHeadingId={activeHeadingId}
-              progress={progress}
+              recentFileIds={recentFileIds}
               expanded={expanded}
               onToggleFile={toggleFile}
               onSelect={handleSelect}
@@ -1114,6 +1193,7 @@ export function DocsApp() {
               onRemoveHighlight={removeHighlight}
               onShowHighlights={setHighlightsOnlyFileId}
               onOpenSettings={openSettings}
+              onAskAi={openAskAi}
               onNewWorkspace={newWorkspace}
               onImportWorkspace={importWorkspace}
               onExportWorkspace={exportWorkspace}
@@ -1121,8 +1201,55 @@ export function DocsApp() {
               workspaces={workspaces}
               currentWorkspaceId={workspaceId}
               onSwitchWorkspace={switchWorkspace}
+              onDeleteWorkspace={deleteWorkspace}
+              docked
+              onOpenPalette={() => setPaletteOpen(true)}
+              onToggleSidebar={toggleSidebar}
             />
           </div>
+
+          <div
+            className="absolute inset-y-0 left-0 flex w-14 flex-col items-center gap-4 border-r border-border bg-background py-3 z-20 transition-opacity duration-200"
+            style={{ 
+              opacity: sidebarCollapsed ? 1 : 0, 
+              pointerEvents: sidebarCollapsed ? "auto" : "none" 
+            }}
+          >
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setPaletteOpen(true)}
+              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label="Search docs or ask AI"
+              title="Search docs or ask AI"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => inputRef.current?.click()}
+              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label="Upload files"
+              title="Upload files"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={openSettings}
+              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label="Settings"
+              title="Settings"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+          </div>
+
           {!sidebarCollapsed && (
             <div
               onMouseDown={startResize}
@@ -1141,9 +1268,8 @@ export function DocsApp() {
               aria-orientation="vertical"
               aria-label="Resize sidebar (double-click to reset)"
               title="Drag to resize · double-click to reset"
-              className="group absolute right-0 top-0 z-20 h-full w-1.5 cursor-col-resize"
+              className="absolute right-0 top-[60px] z-10 h-[calc(100%-60px)] w-1.5 cursor-col-resize"
             >
-              <span className="absolute right-0 top-0 h-full w-px bg-transparent transition-colors group-hover:bg-primary/50" />
             </div>
           )}
         </div>
@@ -1166,7 +1292,7 @@ export function DocsApp() {
                   files={files}
                   activeFileId={activeFileId}
                   activeHeadingId={activeHeadingId}
-                  progress={progress}
+                  recentFileIds={recentFileIds}
                   expanded={expanded}
                   onToggleFile={toggleFile}
                   onSelect={handleSelect}
@@ -1197,6 +1323,10 @@ export function DocsApp() {
                     setDrawerOpen(false);
                   }}
                   onOpenSettings={openSettings}
+                  onAskAi={() => {
+                    setDrawerOpen(false);
+                    openAskAi();
+                  }}
                 />
               </div>
             </div>
@@ -1257,6 +1387,7 @@ export function DocsApp() {
               onUpdateHighlight={updateHighlight}
               onRemoveHighlight={removeHighlight}
               onHome={goHome}
+              onAskAi={askAiFromSelection}
               readingMode={readingMode}
               workspaceId={workspaceId}
               workspaceRevision={workspaceRevision}
@@ -1303,6 +1434,30 @@ export function DocsApp() {
           );
         })()}
 
+      {(() => {
+        const subs =
+          activeFile?.subtopics ||
+          (activeFile ? splitIntoSubtopics(activeFile.content, activeFile.name) : []);
+        const section = subs.find((s) => s.id === activeHeadingId) ?? null;
+        return (
+          <AskAiPanel
+            open={aiOpen}
+            onClose={() => setAiOpen(false)}
+            prefill={aiPrefill}
+            initialSelection={null}
+            activeFile={
+              activeFile
+                ? { id: activeFile.id, name: activeFile.name, content: activeFile.content }
+                : null
+            }
+            activeSection={section ? { title: section.title, content: section.content } : null}
+            files={files.map((f) => ({ id: f.id, name: f.name, content: f.content }))}
+            onInsert={insertAiOutput}
+            onCreateDoc={createAiDoc}
+          />
+        );
+      })()}
+
       {dragOverlay}
     </div>
   );
@@ -1314,6 +1469,7 @@ function Header({
   onMenu,
   hideMenu,
   hideUpload,
+  hideOnDesktop,
   onOpenPalette,
   hasFiles,
   onAddFiles,
@@ -1335,6 +1491,7 @@ function Header({
   onMenu: (() => void) | null;
   hideMenu?: boolean;
   hideUpload?: boolean;
+  hideOnDesktop?: boolean;
   onOpenPalette: () => void;
   hasFiles: boolean;
   onAddFiles: () => void;
@@ -1352,7 +1509,11 @@ function Header({
   onDeleteWorkspace?: (id: string) => void;
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6 relative">
+    <header
+      className={`sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6 relative ${
+        hideOnDesktop ? "lg:hidden md:landscape:hidden" : ""
+      }`}
+    >
       <div className="flex items-center gap-3">
         {!hideMenu && (
           <button
@@ -1366,7 +1527,7 @@ function Header({
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
-            className="hidden rounded-md p-2 text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-90 md:inline-flex md:portrait:hidden"
+            className={`hidden rounded-md p-2 text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-90 md:portrait:hidden ${sidebarCollapsed ? "md:hidden" : "md:inline-flex"}`}
             aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
