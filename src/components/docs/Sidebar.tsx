@@ -25,6 +25,7 @@ import {
   FolderOpen,
   Archive,
   Download,
+  CheckSquare,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { splitIntoSubtopics } from "@/lib/markdown-utils";
@@ -184,6 +185,18 @@ export function Sidebar({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
 
+  // Multi-select mode
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const toggleSelection = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedIds(next);
+  };
+
+
   const total = files.length;
 
   // Recent: files in most-recently-opened order (persisted in IndexedDB as
@@ -272,7 +285,7 @@ export function Sidebar({
       /\.(md|markdown|mdx|txt|docx|pdf|xlsx|xls|csv|json|ppt|pptx|gdoc|gslides)$/i,
       "",
     );
-    const dragActive = reordering && !viewActive && realIndex >= 0;
+    const dragActive = reordering && !viewActive && realIndex >= 0 && !selecting;
     const isDragging = dragActive && dragIndex === realIndex;
     const isDropTarget = dragActive && overIndex === realIndex && dragIndex !== realIndex;
     return (
@@ -314,17 +327,32 @@ export function Sidebar({
           {dragActive && (
             <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
           )}
+          {selecting && (
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center pl-1" onClick={(e) => { e.stopPropagation(); toggleSelection(file.id); }}>
+              <input 
+                type="checkbox" 
+                checked={selectedIds.has(file.id)} 
+                onChange={() => toggleSelection(file.id)}
+                className="h-4 w-4 rounded border-border text-primary focus:ring-primary cursor-pointer"
+              />
+            </div>
+          )}
           <button
-            onClick={() => onSelect(file.id)}
+            onClick={() => {
+              if (selecting) toggleSelection(file.id);
+              else onSelect(file.id);
+            }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
             aria-current={current ? "page" : undefined}
           >
-            <KindIcon
-              className={`h-3.5 w-3.5 shrink-0 ${
-                current ? "text-primary" : "text-muted-foreground/70"
-              }`}
-              aria-hidden
-            />
+            {!selecting && (
+              <KindIcon
+                className={`h-3.5 w-3.5 shrink-0 ${
+                  current ? "text-primary" : "text-muted-foreground/70"
+                }`}
+                aria-hidden
+              />
+            )}
             <span
               className={`min-w-0 flex-1 truncate text-sm ${
                 current ? "font-semibold text-foreground" : "font-medium text-foreground/80"
@@ -336,24 +364,48 @@ export function Sidebar({
               {kind === "markdown" || kind === "text" ? `${mins}m` : null}
             </span>
           </button>
-          <FileMenu
-            onRename={() => {
-              const newName = window.prompt("Rename file to:", file.name);
-              if (newName && newName !== file.name) {
-                onRenameFile(file.id, newName);
+          {!selecting ? (
+            <FileMenu
+              onRename={() => {
+                const newName = window.prompt("Rename file to:", file.name);
+                if (newName && newName !== file.name) {
+                  onRenameFile(file.id, newName);
+                }
+              }}
+              onDelete={() => onRemoveFile(file.id)}
+              onArchive={onArchiveFile ? () => onArchiveFile(file.id) : undefined}
+              onDownload={onDownloadFile ? () => onDownloadFile(file.id) : undefined}
+              onShowHighlights={
+                onShowHighlights && (kind === "markdown" || kind === "text")
+                  ? () => onShowHighlights(file.id)
+                  : undefined
               }
-            }}
-            onDelete={() => onRemoveFile(file.id)}
-            onArchive={onArchiveFile ? () => onArchiveFile(file.id) : undefined}
-            onDownload={onDownloadFile ? () => onDownloadFile(file.id) : undefined}
-            onShowHighlights={
-              onShowHighlights && (kind === "markdown" || kind === "text")
-                ? () => onShowHighlights(file.id)
-                : undefined
-            }
-            reordering={reordering}
-            onToggleReorder={canReorder ? toggleReorder : undefined}
-          />
+              reordering={reordering}
+              onToggleReorder={canReorder ? toggleReorder : undefined}
+              onSelectMode={() => {
+                setSelecting(true);
+                setSelectedIds(new Set([file.id]));
+              }}
+            />
+          ) : selectedIds.has(file.id) ? (
+            <GroupActionMenu
+              onArchive={onArchiveFile ? () => {
+                selectedIds.forEach((id) => onArchiveFile(id));
+                setSelecting(false); setSelectedIds(new Set());
+              } : undefined}
+              onDownload={onDownloadFile ? () => {
+                selectedIds.forEach((id) => onDownloadFile(id));
+                setSelecting(false); setSelectedIds(new Set());
+              } : undefined}
+              onDelete={() => {
+                if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected files?`)) {
+                  selectedIds.forEach((id) => onRemoveFile(id));
+                  setSelecting(false); setSelectedIds(new Set());
+                }
+              }}
+              onCancel={() => { setSelecting(false); setSelectedIds(new Set()); }}
+            />
+          ) : null}
         </div>
       </div>
     );
@@ -421,7 +473,7 @@ export function Sidebar({
       )}
 
       {/* Chip row: switches the file list between All / Grouped / Saved. */}
-      <div className="mt-3 flex w-full min-w-0 items-center border-b border-border p-3 pt-0">
+      <div className="mt-3 flex w-full min-w-0 items-center justify-between gap-2 border-b border-border p-3 pt-0">
         <SidebarChips view={view} onView={onView} />
       </div>
 
@@ -506,6 +558,102 @@ export function Sidebar({
   );
 }
 
+function GroupActionMenu({
+  onArchive,
+  onDownload,
+  onDelete,
+  onCancel,
+}: {
+  onArchive?: () => void;
+  onDownload?: () => void;
+  onDelete: () => void;
+  onCancel: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative ml-0.5 flex shrink-0 items-center">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className={`flex h-6 w-6 items-center justify-center rounded text-primary transition-opacity hover:bg-accent hover:text-primary ${open ? "opacity-100" : "opacity-100"}`}
+        aria-label="Group options"
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-(--z-dropdown) mt-1 w-44 rounded-md border border-border bg-popover p-1 shadow-md">
+          {onDownload && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onDownload();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+            >
+              <Download className="h-3 w-3" />
+              Download Selected
+            </button>
+          )}
+          {onArchive && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onArchive();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+            >
+              <Archive className="h-3 w-3" />
+              Archive Selected
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onDelete();
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive hover:bg-accent/50"
+          >
+            <Trash2 className="h-3 w-3" />
+            Delete Selected
+          </button>
+          <div className="my-1 h-px bg-border" />
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onCancel();
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+          >
+            Cancel Selection
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FileMenu({
   onRename,
   onDelete,
@@ -514,6 +662,7 @@ function FileMenu({
   onShowHighlights,
   reordering,
   onToggleReorder,
+  onSelectMode,
 }: {
   onRename: () => void;
   onDelete: () => void;
@@ -522,6 +671,7 @@ function FileMenu({
   onShowHighlights?: () => void;
   reordering?: boolean;
   onToggleReorder?: () => void;
+  onSelectMode?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -568,6 +718,19 @@ function FileMenu({
             </button>
           )}
           {onToggleReorder && <div className="my-1 h-px bg-border" />}
+          {onSelectMode && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onSelectMode();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+            >
+              <CheckSquare className="h-3 w-3" />
+              Select
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();

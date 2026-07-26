@@ -1455,10 +1455,20 @@ export function DocsApp() {
         (() => {
           const hlFile = files.find((f) => f.id === highlightsOnlyFileId);
           if (!hlFile) return null;
+          const hlFileChunks = hlFile.subtopics || splitIntoSubtopics(hlFile.content, hlFile.name);
+          const chunkOrder = new Map(hlFileChunks.map((c, i) => [c.id, i]));
+          const fileHighlights = highlights
+            .filter((h) => h.fileId === hlFile.id)
+            .sort((a, b) => {
+              const aChunkIndex = chunkOrder.get(a.subtopicId ?? "") ?? -1;
+              const bChunkIndex = chunkOrder.get(b.subtopicId ?? "") ?? -1;
+              if (aChunkIndex !== bChunkIndex) return aChunkIndex - bChunkIndex;
+              return (a.start ?? 0) - (b.start ?? 0);
+            });
           return (
             <HighlightsOnlyModal
               fileName={hlFile.name}
-              highlights={highlights.filter((h) => h.fileId === hlFile.id)}
+              highlights={fileHighlights}
               onClose={() => setHighlightsOnlyFileId(null)}
               onJump={(hl) => {
                 setHighlightsOnlyFileId(null);

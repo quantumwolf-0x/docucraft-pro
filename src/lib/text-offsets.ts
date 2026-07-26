@@ -4,22 +4,97 @@
 // rendered content container. This survives re-renders (no DOM mutation) and
 // handles selections that span multiple elements — the text-match approach
 // could only wrap text inside a single node.
+//
+// Everything here runs off a cached index of the container's text nodes.
+// Rebuilding that index per call meant a full TreeWalker pass on every mouseup,
+// every click, and once per highlight per repaint — O(highlights x document),
+// which is what made single-page mode crawl. The index is built once per
+// container and invalidated by a MutationObserver, so lookups are a map hit or
+// a binary search.
 
-function textNodes(container: HTMLElement): Text[] {
+interface TextIndex {
+  nodes: Text[];
+  /** starts[i] = character offset of nodes[i] from the start of the container. */
+  starts: number[];
+  /** nodes[i] -> i, so a Selection's node resolves without scanning. */
+  order: Map<Text, number>;
+  total: number;
+  /** Full text content, built lazily (only firstTextRange needs it). */
+  text: string | null;
+}
+
+// One content container is live at a time, so a single slot beats a WeakMap
+// (a WeakMap whose value holds an observer on the key would pin the key alive).
+let cachedEl: HTMLElement | null = null;
+let cachedIndex: TextIndex | null = null;
+let observer: MutationObserver | null = null;
+
+function build(container: HTMLElement): TextIndex {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
   const nodes: Text[] = [];
+  const starts: number[] = [];
+  const order = new Map<Text, number>();
+  let acc = 0;
   let n: Node | null;
-  while ((n = walker.nextNode())) nodes.push(n as Text);
-  return nodes;
+  while ((n = walker.nextNode())) {
+    const t = n as Text;
+    order.set(t, nodes.length);
+    starts.push(acc);
+    nodes.push(t);
+    acc += t.length;
+  }
+  return { nodes, starts, order, total: acc, text: null };
+}
+
+function getIndex(container: HTMLElement): TextIndex {
+  if (cachedEl !== container) {
+    // New container (mode switch, section change, document swap). Re-arm the
+    // observer so async content — Mermaid, embeds — invalidates the index too.
+    observer?.disconnect();
+    observer = new MutationObserver(() => {
+      cachedIndex = null;
+    });
+    observer.observe(container, { childList: true, subtree: true, characterData: true });
+    cachedEl = container;
+    cachedIndex = null;
+  }
+  if (!cachedIndex) cachedIndex = build(container);
+  return cachedIndex;
+}
+
+/** Drop the cached index — call when the container is about to be torn down. */
+export function releaseTextIndex() {
+  observer?.disconnect();
+  observer = null;
+  cachedEl = null;
+  cachedIndex = null;
+}
+
+/** Index of the last text node starting at or before `offset`. */
+function nodeAt(idx: TextIndex, offset: number): { node: Text; local: number } | null {
+  if (!idx.nodes.length) return null;
+  let lo = 0;
+  let hi = idx.nodes.length - 1;
+  let ans = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (idx.starts[mid] <= offset) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  const node = idx.nodes[ans];
+  return { node, local: Math.max(0, Math.min(offset - idx.starts[ans], node.length)) };
 }
 
 /** Offset of (node, nodeOffset) measured in characters from the start of container. */
 function pointToOffset(container: HTMLElement, node: Node, nodeOffset: number): number | null {
-  let acc = 0;
-  for (const t of textNodes(container)) {
-    if (t === node) return acc + nodeOffset;
-    acc += t.textContent?.length ?? 0;
-  }
+  const idx = getIndex(container);
+  const i = node.nodeType === Node.TEXT_NODE ? idx.order.get(node as Text) : undefined;
+  if (i !== undefined) return idx.starts[i] + nodeOffset;
+
   // The point may sit on an element node (e.g. between children); approximate by
   // summing text length of everything before it.
   if (node.nodeType === Node.ELEMENT_NODE) {
@@ -40,6 +115,8 @@ export function getSelectionOffsets(
   container: HTMLElement,
 ): { start: number; end: number; text: string } | null {
   const sel = window.getSelection();
+  // Cheap guards first — a plain click fires mouseup too, and must not pay for
+  // an index lookup.
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
   if (!container.contains(range.commonAncestorContainer)) return null;
@@ -51,31 +128,16 @@ export function getSelectionOffsets(
 
 /** Rebuild a DOM Range for the given character offsets within container. */
 export function buildRange(container: HTMLElement, start: number, end: number): Range | null {
-  const nodes = textNodes(container);
-  let acc = 0;
-  let startNode: Text | null = null;
-  let startLocal = 0;
-  let endNode: Text | null = null;
-  let endLocal = 0;
-  for (const t of nodes) {
-    const len = t.textContent?.length ?? 0;
-    if (!startNode && start <= acc + len) {
-      startNode = t;
-      startLocal = start - acc;
-    }
-    if (end <= acc + len) {
-      endNode = t;
-      endLocal = end - acc;
-      break;
-    }
-    acc += len;
-  }
-  if (!startNode || !endNode) return null;
+  const idx = getIndex(container);
+  if (start >= end || start < 0 || start > idx.total) return null;
+  const a = nodeAt(idx, start);
+  const b = nodeAt(idx, Math.min(end, idx.total));
+  if (!a || !b) return null;
   const range = document.createRange();
   try {
-    range.setStart(startNode, Math.max(0, Math.min(startLocal, startNode.length)));
-    range.setEnd(endNode, Math.max(0, Math.min(endLocal, endNode.length)));
-    return range;
+    range.setStart(a.node, a.local);
+    range.setEnd(b.node, b.local);
+    return range.collapsed ? null : range;
   } catch {
     return null;
   }
@@ -104,8 +166,11 @@ export function offsetFromPoint(container: HTMLElement, x: number, y: number): n
 export function firstTextRange(container: HTMLElement, text: string): Range | null {
   const needle = text.trim();
   if (!needle) return null;
-  const full = container.textContent ?? "";
-  const idx = full.toLowerCase().indexOf(needle.toLowerCase());
-  if (idx === -1) return null;
-  return buildRange(container, idx, idx + needle.length);
+  const idx = getIndex(container);
+  // Cached with the index — legacy highlights would otherwise rebuild the
+  // container's full text string once each, on every repaint.
+  if (idx.text == null) idx.text = idx.nodes.map((n) => n.data).join("");
+  const at = idx.text.toLowerCase().indexOf(needle.toLowerCase());
+  if (at === -1) return null;
+  return buildRange(container, at, at + needle.length);
 }

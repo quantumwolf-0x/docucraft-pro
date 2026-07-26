@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import gsap from "gsap";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -34,7 +35,10 @@ import {
   Star,
   Share,
   MoreHorizontal,
+  Presentation,
+  Crosshair,
 } from "lucide-react";
+import { Spotlight } from "./PresentationMode";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ReadingMode } from "@/lib/persistence";
 import { slugify } from "@/lib/markdown-utils";
@@ -47,7 +51,9 @@ import {
   buildRange,
   offsetFromPoint,
   firstTextRange,
+  releaseTextIndex,
 } from "@/lib/text-offsets";
+import { locateInSource, caretTop } from "@/lib/source-locate";
 import { splitIntoSubtopics, headingChunkMap } from "@/lib/markdown-utils";
 import { InlineArtifact } from "./InlineArtifact";
 import { InteractiveBlock } from "./InteractiveBlock";
@@ -126,7 +132,24 @@ export function MarkdownViewer({
   const [progress, setProgress] = useState(0);
   const [showTop, setShowTop] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [presentMode, setPresentMode] = useState(false);
   const [draft, setDraft] = useState(file.content);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setPresentMode(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  const togglePresentation = () => {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen().catch(console.error);
+    } else {
+      document.exitFullscreen().catch(console.error);
+    }
+  };
 
   const allChunks = useMemo(
     () => file.subtopics || splitIntoSubtopics(file.content, file.name),
@@ -197,7 +220,7 @@ export function MarkdownViewer({
   const [menu, setMenu] = useState<HlMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const openCreateMenu = () => {
+  const openCreateMenu = (at?: { x: number; y: number }) => {
     // Offsets are relative to whatever is rendered in contentRef: the active
     // section in paged mode, the whole document in single mode. Both work.
     if (editMode || !contentRef.current) return;
@@ -210,14 +233,80 @@ export function MarkdownViewer({
       text: sel.text,
       start: sel.start,
       end: sel.end,
-      x: r ? r.left + r.width / 2 : window.innerWidth / 2,
-      y: r ? r.top : 120,
+      x: at ? at.x : r ? r.left + r.width / 2 : window.innerWidth / 2,
+      y: at ? at.y : r ? r.top : 120,
       label: "",
     });
   };
 
   const openEditMenu = (hl: Highlight, x: number, y: number) => {
     setMenu({ mode: "edit", hl, x, y, label: hl.label ?? "" });
+  };
+
+  // "Inspect" — the reader's answer to DevTools' inspect element. Take the
+  // rendered text under the pointer, find where it lives in the markdown
+  // source, and drop the editor's caret on it, selected and scrolled into view.
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const [pendingSelect, setPendingSelect] = useState<{ start: number; end: number } | null>(null);
+  const [inspectMissed, setInspectMissed] = useState(false);
+
+  const inspect = (text: string) => {
+    // Paged mode renders one section, so prefer a match inside that section —
+    // a phrase repeated elsewhere shouldn't hijack the jump.
+    const chunkStart = singleMode ? -1 : file.content.indexOf(activeChunk.content);
+    const prefer =
+      chunkStart >= 0 && !singleMode
+        ? { from: chunkStart, to: chunkStart + activeChunk.content.length }
+        : undefined;
+    const span = locateInSource(file.content, text, prefer);
+
+    setMenu(null);
+    window.getSelection()?.removeAllRanges();
+    setInspectMissed(!span);
+    // The editor edits `draft`; make sure it starts from what's on screen.
+    setDraft(file.content);
+    setEditMode(true);
+    setPendingSelect(span ?? { start: Math.max(0, chunkStart), end: Math.max(0, chunkStart) });
+  };
+
+  // Applied once the textarea has mounted with the new draft.
+  useEffect(() => {
+    if (!pendingSelect || !editMode) return;
+    const ta = editorRef.current;
+    if (!ta) return;
+    const { start, end } = pendingSelect;
+    setPendingSelect(null);
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(start, end);
+    ta.scrollTop = Math.max(0, caretTop(ta, start) - ta.clientHeight / 3);
+    ta.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [pendingSelect, editMode, draft]);
+
+  // The "couldn't find it" notice is per-jump, not sticky.
+  useEffect(() => {
+    if (!inspectMissed) return;
+    const t = setTimeout(() => setInspectMissed(false), 6000);
+    return () => clearTimeout(t);
+  }, [inspectMissed]);
+
+  // Right-click behaves like DevTools: it acts on what's under the pointer.
+  // With nothing selected, select the block being pointed at first, so the
+  // popover (and Inspect) has something concrete to work with.
+  const onContextMenu = (e: React.MouseEvent) => {
+    if (editMode || !contentRef.current) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) {
+      const el = (e.target as HTMLElement)?.closest(
+        "p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, pre, figcaption",
+      );
+      if (!el || !contentRef.current.contains(el)) return;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+    e.preventDefault();
+    openCreateMenu({ x: e.clientX, y: e.clientY });
   };
 
   // Paint persistent highlights with the CSS Custom Highlight API — no DOM
@@ -229,42 +318,53 @@ export function MarkdownViewer({
       Map<string, any> | undefined;
     if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
 
-    const groups: Record<string, Range[]> = {};
-    for (const hl of highlights) {
-      let range: Range | null;
-      if (singleMode) {
-        // Whole-doc view. Highlights made here carry no subtopicId and full-doc
-        // offsets — use them directly. Section highlights (subtopicId set) have
-        // offsets relative to their section, meaningless here, so anchor by text.
-        range =
-          !hl.subtopicId && typeof hl.start === "number" && typeof hl.end === "number"
-            ? buildRange(container, hl.start, hl.end)
-            : firstTextRange(container, hl.text);
-      } else {
-        if (hl.subtopicId && hl.subtopicId !== activeChunk.id) continue;
-        range =
-          typeof hl.start === "number" && typeof hl.end === "number"
-            ? buildRange(container, hl.start, hl.end)
-            : firstTextRange(container, hl.text);
+    // Deferred to the next frame so adding a highlight doesn't repaint every
+    // other one synchronously inside the same commit the reader is watching.
+    const frame = requestAnimationFrame(() => {
+      const groups: Record<string, Range[]> = {};
+      for (const hl of highlights) {
+        let range: Range | null;
+        if (singleMode) {
+          // Whole-doc view. Highlights made here carry no subtopicId and full-doc
+          // offsets — use them directly. Section highlights (subtopicId set) have
+          // offsets relative to their section, meaningless here, so anchor by text.
+          range =
+            !hl.subtopicId && typeof hl.start === "number" && typeof hl.end === "number"
+              ? buildRange(container, hl.start, hl.end)
+              : firstTextRange(container, hl.text);
+        } else {
+          if (hl.subtopicId && hl.subtopicId !== activeChunk.id) continue;
+          range =
+            typeof hl.start === "number" && typeof hl.end === "number"
+              ? buildRange(container, hl.start, hl.end)
+              : firstTextRange(container, hl.text);
+        }
+        if (!range || range.collapsed) continue;
+        const g = hlGroup(hl.color);
+        (groups[g] ||= []).push(range);
       }
-      if (!range || range.collapsed) continue;
-      const g = hlGroup(hl.color);
-      (groups[g] ||= []).push(range);
-    }
 
-    HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
-    for (const [g, ranges] of Object.entries(groups)) {
-      CSSH.set(g, new (window as any).Highlight(...ranges));
-    }
+      HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
+      for (const [g, ranges] of Object.entries(groups)) {
+        CSSH.set(g, new (window as any).Highlight(...ranges));
+      }
+    });
+
     return () => {
+      cancelAnimationFrame(frame);
       HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
     };
   }, [highlights, activeChunk.id, renderContent, fullRender, editMode, singleMode]);
+
+  // The offset index outlives this component's containers; drop it on unmount
+  // so a stale document can't keep its text nodes (or its observer) alive.
+  useEffect(() => releaseTextIndex, []);
 
   // Click inside the content: if the click lands on an existing highlight, open
   // its edit popover (CSS highlights aren't DOM nodes, so we hit-test offsets).
   const onContentClick = (e: React.MouseEvent) => {
     if (editMode || !contentRef.current) return;
+    if (!highlights.length) return; // nothing to hit-test against
     if (!window.getSelection()?.isCollapsed) return; // a drag-select, not a click
     const off = offsetFromPoint(contentRef.current, e.clientX, e.clientY);
     if (off == null) return;
@@ -310,7 +410,17 @@ export function MarkdownViewer({
     const ctx = gsap.fromTo(
       containerRef.current,
       { opacity: 0, y: 10 },
-      { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" },
+      {
+        opacity: 1,
+        y: 0,
+        duration: 0.4,
+        ease: "power2.out",
+        // Leave no residual transform behind: any transform, even an identity
+        // one, turns this element into the containing block for `position:
+        // fixed` descendants, which would re-anchor the selection popover to
+        // the scroller instead of the viewport.
+        clearProps: "transform",
+      },
     );
     return () => {
       ctx.kill();
@@ -324,6 +434,14 @@ export function MarkdownViewer({
     return () => clearTimeout(t);
   }, [draft, editMode, file.id, onContentChange]);
 
+  const scrollToTop = () => {
+    if (presentMode && containerRef.current) {
+      containerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
   // Paginated: when a nested ##/### heading inside the page is selected, scroll
   // to its anchor; otherwise (page's own # or a page change) reset to top.
   // (Skipped in single mode, which scrolls within the whole-doc render below.)
@@ -334,7 +452,7 @@ export function MarkdownViewer({
         ? document.getElementById(activeSubtopicId)
         : null;
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    else window.scrollTo({ top: 0 });
+    else scrollToTop();
   }, [activeChunk.id, activeSubtopicId, file.id, singleMode]);
 
   // Single-page: switching document scrolls to top; selecting a section from the
@@ -343,20 +461,21 @@ export function MarkdownViewer({
     if (!singleMode) return;
     const el = activeSubtopicId ? document.getElementById(activeSubtopicId) : null;
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    else window.scrollTo({ top: 0 });
+    else scrollToTop();
   }, [singleMode, activeSubtopicId, file.id]);
 
   // Scrollspy, ambient progress, and earned completion. Completion is reported
   // by how far the reader has actually scrolled.
   useEffect(() => {
+    const target = presentMode && containerRef.current ? containerRef.current : window;
     const onScroll = () => {
-      const scrolled = window.scrollY;
+      const scrolled = presentMode && containerRef.current ? containerRef.current.scrollTop : window.scrollY;
       setShowTop(scrolled > 400);
     };
     onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, [file.id, activeChunk.id, editMode]);
+    target.addEventListener("scroll", onScroll, { passive: true });
+    return () => target.removeEventListener("scroll", onScroll);
+  }, [file.id, activeChunk.id, editMode, presentMode]);
 
   // Save shortcut
   useEffect(() => {
@@ -397,6 +516,11 @@ export function MarkdownViewer({
   };
 
   const walkChildren = (children: any): any => {
+    // With no active search there is nothing to wrap. Returning children
+    // untouched avoids blanketing the document in <span>s — which bloated the
+    // DOM and, worse, split it into thousands of extra text nodes that every
+    // offset lookup then had to walk.
+    if (!highlightQuery?.trim()) return children;
     if (typeof children === "string") return highlightText(children);
     if (Array.isArray(children))
       return children.map((c, i) => <span key={i}>{walkChildren(c)}</span>);
@@ -491,9 +615,11 @@ export function MarkdownViewer({
       td: (p: any) => <td {...p}>{walkChildren(p.children)}</td>,
       th: (p: any) => <th {...p}>{walkChildren(p.children)}</th>,
     }),
+    // `highlights` is deliberately absent: nothing here reads it, and including
+    // it rebuilt every renderer on each highlight change, re-rendering the whole
+    // markdown tree (the entire document, in single-page mode).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      highlights,
       highlightQuery,
       workspaceId,
       workspaceRevision,
@@ -504,108 +630,149 @@ export function MarkdownViewer({
   );
 
   return (
-    <>
-      {/* Sticky Top Navigation Bar matching Nav.png */}
-      <ViewerHeader
-        nav={{
-          onPrev: () =>
-            singleMode
-              ? prevFile && onNav(prevFile.id, null)
-              : prevChunk && onNav(file.id, prevChunk.id),
-          onNext: () =>
-            singleMode
-              ? nextFile && onNav(nextFile.id, null)
-              : nextChunk && onNav(file.id, nextChunk.id),
-          prevDisabled: singleMode ? !prevFile : !prevChunk,
-          nextDisabled: singleMode ? !nextFile : !nextChunk,
-          prevLabel: singleMode ? "Previous file" : "Previous section",
-          nextLabel: singleMode ? "Next file" : "Next section",
-        }}
-        center={
-          singleMode || allChunks.length <= 1 ? (
-            <HeaderTitle icon={<BookOpen className="h-4 w-4" />} title={stripExt(file.name)} />
-          ) : (
-            <Select value={activeChunk.id} onValueChange={(val) => onNav(file.id, val)}>
-              <SelectTrigger className="w-fit h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
-                <BookOpen className="h-4 w-4 text-muted-foreground" />
-                <span className="truncate max-w-40 sm:max-w-xs text-left">
-                  {stripExt(file.name)}
-                </span>
-              </SelectTrigger>
-              <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
-                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
-                  Sections
-                </div>
-                <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
-                  {allChunks.map((chunk) => {
-                    const words = chunk.content.trim().split(/\s+/).filter(Boolean).length;
-                    const readingMin = Math.max(1, Math.round(words / 220));
-                    return (
-                      <SelectItem
-                        key={chunk.id}
-                        value={chunk.id}
-                        className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
-                      >
-                        <div className="flex w-full items-center justify-between gap-4">
-                          <span className="truncate">
-                            {chunk.title.length > 20
-                              ? chunk.title.substring(0, 20) + "..."
-                              : chunk.title}
-                          </span>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {readingMin} min
-                          </span>
-                        </div>
-                      </SelectItem>
-                    );
-                  })}
-                </div>
-              </SelectContent>
-            </Select>
-          )
-        }
-        actions={
-          <>
-            <button
-              type="button"
-              onClick={onToggleBookmark}
-              aria-label={isBookmarked ? "Unstar" : "Star"}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
-            </button>
-            {!editMode && onToggleReadingMode && (
+    <div className="flex h-full flex-col bg-background">
+      {!presentMode && (
+        <ViewerHeader
+          nav={{
+            onPrev: () =>
+              singleMode
+                ? prevFile && onNav(prevFile.id, null)
+                : prevChunk && onNav(file.id, prevChunk.id),
+            onNext: () =>
+              singleMode
+                ? nextFile && onNav(nextFile.id, null)
+                : nextChunk && onNav(file.id, nextChunk.id),
+            prevDisabled: singleMode ? !prevFile : !prevChunk,
+            nextDisabled: singleMode ? !nextFile : !nextChunk,
+            prevLabel: singleMode ? "Previous file" : "Previous section",
+            nextLabel: singleMode ? "Next file" : "Next section",
+          }}
+          center={
+            singleMode || allChunks.length <= 1 ? (
+              <HeaderTitle icon={<BookOpen className="h-4 w-4" />} title={stripExt(file.name)} />
+            ) : (
+              <Select value={activeChunk.id} onValueChange={(val) => onNav(file.id, val)}>
+                <SelectTrigger className="w-fit h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
+                  <BookOpen className="h-4 w-4 text-muted-foreground" />
+                  <span className="truncate max-w-40 sm:max-w-xs text-left">
+                    {stripExt(file.name)}
+                  </span>
+                </SelectTrigger>
+                <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
+                    Sections
+                  </div>
+                  <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
+                    {allChunks.map((chunk) => {
+                      const words = chunk.content.trim().split(/\s+/).filter(Boolean).length;
+                      const readingMin = Math.max(1, Math.round(words / 220));
+                      return (
+                        <SelectItem
+                          key={chunk.id}
+                          value={chunk.id}
+                          className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
+                        >
+                          <div className="flex w-full items-center justify-between gap-4">
+                            <span className="truncate">
+                              {chunk.title.length > 20
+                                ? chunk.title.substring(0, 20) + "..."
+                                : chunk.title}
+                            </span>
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {readingMin} min
+                            </span>
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
+                  </div>
+                </SelectContent>
+              </Select>
+            )
+          }
+          actions={
+            <>
               <button
-                onClick={onToggleReadingMode}
-                title={
-                  singleMode
-                    ? "Paged: read one section at a time"
-                    : "Single page: read the whole document"
-                }
+                type="button"
+                onClick={onToggleBookmark}
+                aria-label={isBookmarked ? "Unstar" : "Star"}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
-                <Files className="h-4 w-4" />
+                <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
               </button>
-            )}
-            {!editMode && (
-              <button
-                onClick={() => setEditMode(true)}
-                title="Edit document"
-                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <Pencil className="h-4 w-4" />
-              </button>
-            )}
-          </>
-        }
-      />
-      {menu && !editMode && (
-        <div
-          ref={menuRef}
-          className="fixed z-(--z-dropdown) w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
-          style={{ top: Math.max(56, menu.y - 12), left: menu.x }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
+              {!editMode && onToggleReadingMode && (
+                <button
+                  onClick={onToggleReadingMode}
+                  title={
+                    singleMode
+                      ? "Paged: read one section at a time"
+                      : "Single page: read the whole document"
+                  }
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Files className="h-4 w-4" />
+                </button>
+              )}
+              {!editMode && (
+                <button
+                  onClick={togglePresentation}
+                  title="Present Mode (Fullscreen & Spotlight)"
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Presentation className="h-4 w-4" />
+                </button>
+              )}
+              {!editMode && (
+                <button
+                  onClick={() => setEditMode(true)}
+                  title="Edit document"
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+              )}
+            </>
+          }
+        />
+      )}
+      <div ref={containerRef} className="relative flex-1 overflow-y-auto transition-colors duration-500">
+      <Spotlight active={presentMode} />
+      {presentMode && (
+        <div className="fixed top-4 left-4 z-50 flex items-center gap-1 rounded-full border border-border/20 bg-background/30 p-1 backdrop-blur-md opacity-30 hover:opacity-100 transition-opacity">
+          <button
+            onClick={() => singleMode ? prevFile && onNav(prevFile.id, null) : prevChunk && onNav(file.id, prevChunk.id)}
+            disabled={singleMode ? !prevFile : !prevChunk}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <button
+            onClick={() => singleMode ? nextFile && onNav(nextFile.id, null) : nextChunk && onNav(file.id, nextChunk.id)}
+            disabled={singleMode ? !nextFile : !nextChunk}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+      )}
+
+      {menu &&
+        !editMode &&
+        // Portalled to <body> on purpose. The popover is positioned in viewport
+        // coordinates, and any transformed ancestor (the GSAP entrance tween,
+        // a backdrop-filter, a `will-change`) would silently become its
+        // containing block and throw those coordinates off by the scroller's
+        // height — which is what hid it entirely in single-page mode.
+        createPortal(
+          <div
+            ref={menuRef}
+            className="fixed z-(--z-dropdown) w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
+            style={{
+              top: Math.min(Math.max(56, menu.y - 12), window.innerHeight - 24),
+              left: Math.min(Math.max(132, menu.x), window.innerWidth - 132),
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
           <div className="mb-2 flex items-center justify-between px-1">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               {menu.mode === "create" ? "Highlight" : "Edit highlight"}
@@ -711,6 +878,14 @@ export function MarkdownViewer({
             />
           </div>
 
+          <button
+            onClick={() => inspect(menu.mode === "create" ? menu.text : menu.hl.text)}
+            title="Open the editor with this text selected"
+            className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+          >
+            <Crosshair className="h-3.5 w-3.5" /> Inspect in source
+          </button>
+
           <div className="flex items-center gap-1">
             <button
               onClick={() => {
@@ -752,15 +927,16 @@ export function MarkdownViewer({
               </button>
             )}
           </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
 
       {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
       <div className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}>
         <article
-          ref={containerRef}
-          onMouseUp={openCreateMenu}
+          onMouseUp={() => openCreateMenu()}
+          onContextMenu={onContextMenu}
           className="docs-prose mx-auto min-w-0 flex-1"
         >
           {!singleMode && (
@@ -794,7 +970,14 @@ export function MarkdownViewer({
                   <Eye className="h-3.5 w-3.5" /> Done · Preview
                 </button>
               </div>
+              {inspectMissed && (
+                <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
+                  Couldn't pin that text to a spot in the source — the editor is open at the start
+                  of this section instead.
+                </div>
+              )}
               <textarea
+                ref={editorRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
@@ -802,7 +985,12 @@ export function MarkdownViewer({
               />
             </div>
           ) : (
-            <div ref={contentRef} onClick={onContentClick}>
+            <div
+              key={singleMode ? "full" : activeChunk.id}
+              ref={contentRef}
+              onClick={onContentClick}
+              className={presentMode ? "animate-in fade-in slide-in-from-bottom-4 duration-500 fill-mode-forwards" : ""}
+            >
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkMath, remarkInteractiveBlockMeta]}
                 rehypePlugins={[
@@ -890,14 +1078,15 @@ export function MarkdownViewer({
 
       {showTop && (
         <button
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          onClick={scrollToTop}
           aria-label="Back to top"
           className="fixed bottom-6 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 shadow-lg backdrop-blur transition-all hover:bg-accent active:scale-90"
         >
           <ArrowUp className="h-4 w-4" />
         </button>
       )}
-    </>
+      </div>
+    </div>
   );
 }
 
