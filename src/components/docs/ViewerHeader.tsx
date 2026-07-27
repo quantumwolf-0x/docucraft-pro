@@ -32,7 +32,7 @@ export function ViewerHeader({
 }) {
   return (
     <div className="sticky top-0 z-(--z-sticky) flex h-14 shrink-0 items-center gap-2 border-b border-border/50 bg-background/80 px-4 backdrop-blur-md md:px-7">
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         <HeaderNavButton
           onClick={nav.onPrev}
           disabled={nav.prevDisabled}
@@ -49,7 +49,7 @@ export function ViewerHeader({
         </HeaderNavButton>
       </div>
       <div className="flex min-w-0 flex-1 items-center gap-2">{center}</div>
-      {actions && <div className="flex items-center gap-1">{actions}</div>}
+      {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
     </div>
   );
 }

@@ -14,7 +14,6 @@ import {
   Link2,
   ArrowLeft,
   ArrowRight,
-  ArrowUp,
   ChevronRight,
   Clock,
   Pencil,
@@ -73,6 +72,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ViewerHeader, HeaderTitle } from "./ViewerHeader";
 
 interface Props {
@@ -140,7 +145,8 @@ export function MarkdownViewer({
   const singleMode = readingMode === "single";
   const containerRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState(0);
-  const [showTop, setShowTop] = useState(false);
+  const [isScrolling, setIsScrolling] = useState(false);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [presentMode, setPresentMode] = useState(false);
   const [draft, setDraft] = useState(file.content);
@@ -556,18 +562,49 @@ export function MarkdownViewer({
     else scrollToTop();
   }, [singleMode, activeSubtopicId, file.id]);
 
-  // Scrollspy, ambient progress, and earned completion. Completion is reported
-  // by how far the reader has actually scrolled.
+  // Reading progress: how far down the rendered document the reader has come,
+  // as a 0–100 percentage. The article scrolls inside `containerRef`, but fall
+  // back to the document scroller in case an ancestor layout owns the overflow.
   useEffect(() => {
-    const target = presentMode && containerRef.current ? containerRef.current : window;
-    const onScroll = () => {
-      const scrolled = presentMode && containerRef.current ? containerRef.current.scrollTop : window.scrollY;
-      setShowTop(scrolled > 400);
+    const el = containerRef.current;
+    if (!el) return;
+
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const inner = el.scrollHeight - el.clientHeight > 1;
+      const doc = document.documentElement;
+      const top = inner ? el.scrollTop : window.scrollY;
+      const span = inner ? el.scrollHeight - el.clientHeight : doc.scrollHeight - window.innerHeight;
+      // Nothing to scroll: the whole page is already on screen, so it's read.
+      const pct = span <= 1 ? 100 : (top / span) * 100;
+      setProgress(Math.min(100, Math.max(0, Math.round(pct))));
     };
-    onScroll();
-    target.addEventListener("scroll", onScroll, { passive: true });
-    return () => target.removeEventListener("scroll", onScroll);
-  }, [file.id, activeChunk.id, editMode, presentMode]);
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+      setIsScrolling(true);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => setIsScrolling(false), 1500);
+    };
+
+    measure();
+    el.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    // Images, embeds and KaTeX settle after the first paint and change the
+    // scrollable span; re-measure instead of leaving a stale percentage.
+    const ro = new ResizeObserver(schedule);
+    ro.observe(el);
+    if (contentRef.current) ro.observe(contentRef.current);
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      ro.disconnect();
+      el.removeEventListener("scroll", schedule);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+    };
+  }, [file.id, activeChunk.id, editMode, presentMode, singleMode, renderContent, fullRender]);
 
   // Save shortcut
   useEffect(() => {
@@ -741,15 +778,19 @@ export function MarkdownViewer({
           }}
           center={
             singleMode || allChunks.length <= 1 ? (
-              <HeaderTitle icon={<BookOpen className="h-4 w-4" />} title={stripExt(file.name)} />
+              <>
+                <span className="truncate min-w-0 text-sm font-semibold text-foreground">
+                  {stripExt(file.name)}
+                </span>
+              </>
             ) : (
-              <Select value={activeChunk.id} onValueChange={(val) => onNav(file.id, val)}>
-                <SelectTrigger className="w-fit h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
-                  <BookOpen className="h-4 w-4 text-muted-foreground" />
-                  <span className="truncate max-w-40 sm:max-w-xs text-left">
-                    {stripExt(file.name)}
-                  </span>
-                </SelectTrigger>
+              <>
+                <Select value={activeChunk.id} onValueChange={(val) => onNav(file.id, val)}>
+                  <SelectTrigger className="w-fit min-w-0 max-w-full h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
+                    <span className="truncate min-w-0 text-left">
+                      {stripExt(file.name)}
+                    </span>
+                  </SelectTrigger>
                 <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
                   <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
                     Sections
@@ -780,49 +821,86 @@ export function MarkdownViewer({
                   </div>
                 </SelectContent>
               </Select>
+            </>
             )
           }
           actions={
             <>
-              <button
-                type="button"
-                onClick={onToggleBookmark}
-                aria-label={isBookmarked ? "Unstar" : "Star"}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
-              </button>
-              {!editMode && onToggleReadingMode && (
+              <div className="hidden md:flex items-center gap-1">
                 <button
-                  onClick={onToggleReadingMode}
-                  title={
-                    singleMode
-                      ? "Paged: read one section at a time"
-                      : "Single page: read the whole document"
-                  }
+                  type="button"
+                  onClick={onToggleBookmark}
+                  aria-label={isBookmarked ? "Unstar" : "Star"}
                   className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  <Files className="h-4 w-4" />
+                  <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
                 </button>
-              )}
-              {!editMode && (
-                <button
-                  onClick={togglePresentation}
-                  title="Present Mode (Fullscreen & Spotlight)"
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Presentation className="h-4 w-4" />
-                </button>
-              )}
-              {!editMode && (
-                <button
-                  onClick={() => setEditMode(true)}
-                  title="Edit document"
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-              )}
+                {!editMode && onToggleReadingMode && (
+                  <button
+                    onClick={onToggleReadingMode}
+                    title={
+                      singleMode
+                        ? "Paged: read one section at a time"
+                        : "Single page: read the whole document"
+                    }
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Files className="h-4 w-4" />
+                  </button>
+                )}
+                {!editMode && (
+                  <button
+                    onClick={togglePresentation}
+                    title="Present Mode (Fullscreen & Spotlight)"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Presentation className="h-4 w-4" />
+                  </button>
+                )}
+                {!editMode && (
+                  <button
+                    onClick={() => setEditMode(true)}
+                    title="Edit document"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex md:hidden items-center">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={onToggleBookmark}>
+                      <Star className={`mr-2 h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
+                      {isBookmarked ? "Unstar" : "Star"}
+                    </DropdownMenuItem>
+                    {!editMode && onToggleReadingMode && (
+                      <DropdownMenuItem onClick={onToggleReadingMode}>
+                        <Files className="mr-2 h-4 w-4" />
+                        Single page
+                      </DropdownMenuItem>
+                    )}
+                    {!editMode && (
+                      <DropdownMenuItem onClick={togglePresentation}>
+                        <Presentation className="mr-2 h-4 w-4" />
+                        Presentation Mode
+                      </DropdownMenuItem>
+                    )}
+                    {!editMode && (
+                      <DropdownMenuItem onClick={() => setEditMode(true)}>
+                        <Pencil className="mr-2 h-4 w-4" />
+                        Edit document
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </>
           }
         />
@@ -1116,7 +1194,7 @@ export function MarkdownViewer({
                     >
                       <span className="min-w-0 flex-1">
                         <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
-                          Next
+                          Next {chunkIndex + 2}/{allChunks.length}
                         </span>
                         <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
                           {nextChunk.title}
@@ -1174,19 +1252,17 @@ export function MarkdownViewer({
         </article>
       </div>
 
-      {showTop && (
-        <button
-          onClick={scrollToTop}
-          aria-label="Back to top"
-          className="fixed bottom-6 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 shadow-lg backdrop-blur transition-all hover:bg-accent active:scale-90"
-        >
-          <ArrowUp className="h-4 w-4" />
-        </button>
+      {isScrolling && !editMode && !presentMode && (
+        <div className="fixed bottom-6 right-6 z-50 flex h-8 min-w-[3rem] items-center justify-center rounded-full bg-muted/40 backdrop-blur-sm px-2.5 tabular-nums text-xs font-medium text-muted-foreground opacity-60 transition-all duration-300 animate-in fade-in zoom-in-95 pointer-events-none shadow-sm">
+          {progress}%
+        </div>
       )}
       </div>
     </div>
   );
 }
+
+
 
 function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
   const [copied, setCopied] = useState(false);
