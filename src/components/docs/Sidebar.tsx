@@ -27,10 +27,18 @@ import {
   Archive,
   Download,
   CheckSquare,
+  Share2,
+  Hash,
+  Table,
+  Code,
+  Quote,
+  List,
+  Star,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { splitIntoSubtopics } from "@/lib/markdown-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
+import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-items";
 import type { MdFile, DocumentKind } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
 import { fileLabel, getDocumentKind } from "@/lib/document-utils";
@@ -57,6 +65,37 @@ const KIND_ICON: Partial<Record<DocumentKind, LucideIcon>> = {
 
 function kindIcon(kind: DocumentKind): LucideIcon {
   return KIND_ICON[kind] ?? FileIcon;
+}
+
+/** Glyph for a saved item, so the Saved list scans by what was starred. */
+function savedIcon(item: SavedItem): LucideIcon {
+  if (item.kind === "file") return FileText;
+  if (item.kind === "section") return Hash;
+  switch (item.blockType) {
+    case "table":
+      return Table;
+    case "code":
+      return Code;
+    case "quote":
+      return Quote;
+    case "image":
+      return FileImage;
+    case "list":
+      return List;
+    default:
+      return Star;
+  }
+}
+
+/** Saved items grouped under the file they came from, newest group first. */
+function savedByFile(items: SavedEntry[]): Array<[string, SavedEntry[]]> {
+  const groups = new Map<string, SavedEntry[]>();
+  for (const item of items) {
+    const bucket = groups.get(item.fileName);
+    if (bucket) bucket.push(item);
+    else groups.set(item.fileName, [item]);
+  }
+  return [...groups.entries()];
 }
 
 /**
@@ -89,14 +128,17 @@ interface Props {
   onAddFiles: () => void;
   onRemoveFile: (id: string) => void;
   onRenameFile: (id: string, newName: string) => void;
-  bookmarks: { fileId: string; subtopicId: string; name: string }[];
+  /** Stars on documents, sections and blocks — the Saved chip. */
+  saved: SavedEntry[];
   currentWorkspaceName: string;
   canDeleteWorkspace: boolean;
   onRenameCurrentWorkspace: (name: string) => void;
   onDeleteCurrentWorkspace: () => void;
   onClearStorage: () => void;
   highlights: Highlight[];
-  onRemoveBookmark: (fileId: string, subtopicId: string) => void;
+  /** Go to a saved item: its file, its page, then the passage itself. */
+  onOpenSaved: (item: SavedItem) => void;
+  onRemoveSaved: (id: string) => void;
   onRemoveHighlight: (id: string) => void;
   /** Open the isolated "highlights only" view for a file (text-based only). */
   onShowHighlights?: (fileId: string) => void;
@@ -119,6 +161,10 @@ interface Props {
   onDeleteWorkspace?: (id: string) => void;
   onArchiveFile?: (id: string) => void;
   onDownloadFile?: (id: string) => void;
+  /** Copy a link to one file. The recipient chooses where it lands. */
+  onShareFile?: (id: string) => void;
+  /** Copy a link to the multi-select batch. */
+  onShareFiles?: (ids: string[]) => void;
   /**
    * Docked = the desktop/landscape full-height rail with no app header. It grows
    * a workspace picker, a search field, and a continue-reading card at the top.
@@ -140,14 +186,15 @@ export function Sidebar({
   onAddFiles,
   onRemoveFile,
   onRenameFile,
-  bookmarks,
+  saved,
   currentWorkspaceName,
   canDeleteWorkspace,
   onRenameCurrentWorkspace,
   onDeleteCurrentWorkspace,
   onClearStorage,
   highlights,
-  onRemoveBookmark,
+  onOpenSaved,
+  onRemoveSaved,
   onRemoveHighlight,
   onShowHighlights,
   onReorderFile,
@@ -166,6 +213,8 @@ export function Sidebar({
   onDeleteWorkspace,
   onArchiveFile,
   onDownloadFile,
+  onShareFile,
+  onShareFiles,
   docked = false,
   onOpenPalette,
   onToggleSidebar,
@@ -401,6 +450,7 @@ export function Sidebar({
               onDelete={() => onRemoveFile(file.id)}
               onArchive={onArchiveFile ? () => onArchiveFile(file.id) : undefined}
               onDownload={onDownloadFile ? () => onDownloadFile(file.id) : undefined}
+              onShare={onShareFile ? () => onShareFile(file.id) : undefined}
               onShowHighlights={
                 onShowHighlights && (kind === "markdown" || kind === "text")
                   ? () => onShowHighlights(file.id)
@@ -415,6 +465,15 @@ export function Sidebar({
             />
           ) : selectedIds.has(file.id) ? (
             <GroupActionMenu
+              onShare={
+                onShareFiles
+                  ? () => {
+                      onShareFiles([...selectedIds]);
+                      setSelecting(false);
+                      setSelectedIds(new Set());
+                    }
+                  : undefined
+              }
               onArchive={onArchiveFile ? () => {
                 selectedIds.forEach((id) => onArchiveFile(id));
                 setSelecting(false); setSelectedIds(new Set());
@@ -525,31 +584,57 @@ export function Sidebar({
             recentFiles.map(renderFileRow)
           )
         ) : view.mode === "saved" ? (
-          bookmarks.length === 0 ? (
-            <p className="px-2 py-4 text-sm text-muted-foreground">No saved items yet.</p>
+          saved.length === 0 ? (
+            <p className="px-2 py-4 text-sm text-muted-foreground">
+              No saved items yet. Star a document, a section, a table or a code block.
+            </p>
           ) : (
-            <ul className="space-y-1.5">
-              {bookmarks.map((bm) => (
-                <li
-                  key={`${bm.fileId}-${bm.subtopicId}`}
-                  className="group flex items-center gap-1 rounded-lg px-1 hover:bg-accent/60"
-                >
-                  <button
-                    onClick={() => onSelect(bm.fileId, bm.subtopicId)}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left text-sm font-medium text-foreground/80"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{bm.name}</span>
-                  </button>
-                  <button
-                    onClick={() => onRemoveBookmark(bm.fileId, bm.subtopicId)}
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity hover:text-destructive md:opacity-0 md:group-hover:opacity-100"
-                    aria-label="Remove bookmark"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
+            savedByFile(saved).map(([fileName, items]) => (
+              <div key={fileName} className="mb-3">
+                <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  {fileName}
+                </div>
+                <ul className="space-y-1">
+                  {items.map((item) => {
+                    const Icon = savedIcon(item);
+                    return (
+                      <li
+                        key={item.id}
+                        className="group flex items-start gap-1 rounded-lg px-1 hover:bg-accent/60"
+                      >
+                        <button
+                          onClick={() => onOpenSaved(item)}
+                          className="flex min-w-0 flex-1 items-start gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
+                          title={item.text || item.title}
+                        >
+                          <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-foreground/80">
+                              {item.title}
+                            </span>
+                            <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                              {savedTypeLabel(item)}
+                              {item.orphaned && (
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  · edited away
+                                </span>
+                              )}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => onRemoveSaved(item.id)}
+                          className="mt-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity hover:text-destructive md:opacity-0 md:group-hover:opacity-100"
+                          aria-label="Remove saved item"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))
           )
         ) : total === 0 ? null : (
           groups.map((groupItem) => (
@@ -587,6 +672,7 @@ export function Sidebar({
 }
 
 function GroupActionMenu({
+  onShare,
   onArchive,
   onDownload,
   onDelete,
@@ -594,6 +680,7 @@ function GroupActionMenu({
   onSelectAll,
   allSelected,
 }: {
+  onShare?: () => void;
   onArchive?: () => void;
   onDownload?: () => void;
   onDelete: () => void;
@@ -650,6 +737,19 @@ function GroupActionMenu({
             </kbd>
           </button>
           <div className="my-1 h-px bg-border" />
+          {onShare && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onShare();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+            >
+              <Share2 className="h-3 w-3" />
+              Share Selected
+            </button>
+          )}
           {onDownload && (
             <button
               onClick={(e) => {
@@ -709,6 +809,7 @@ function FileMenu({
   onDelete,
   onArchive,
   onDownload,
+  onShare,
   onShowHighlights,
   reordering,
   onToggleReorder,
@@ -718,6 +819,7 @@ function FileMenu({
   onDelete: () => void;
   onArchive?: () => void;
   onDownload?: () => void;
+  onShare?: () => void;
   onShowHighlights?: () => void;
   reordering?: boolean;
   onToggleReorder?: () => void;
@@ -792,6 +894,19 @@ function FileMenu({
             <Pencil className="h-3 w-3" />
             Rename
           </button>
+          {onShare && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onShare();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+            >
+              <Share2 className="h-3 w-3" />
+              Share link
+            </button>
+          )}
           {onDownload && (
             <button
               onClick={(e) => {

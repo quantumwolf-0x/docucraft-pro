@@ -161,6 +161,22 @@ export function getSelectionOffsets(
   return { start: Math.min(start, end), end: Math.max(start, end), text: sel.toString() };
 }
 
+/**
+ * Character offsets of an element's own text within container — the block-level
+ * counterpart to `getSelectionOffsets`, used when the reader stars a table, a
+ * code block or a quote instead of dragging over it.
+ */
+export function nodeOffsets(
+  container: HTMLElement,
+  el: HTMLElement,
+): { start: number; end: number; text: string } | null {
+  if (!container.contains(el)) return null;
+  const start = pointToOffset(container, el, 0);
+  const end = pointToOffset(container, el, el.childNodes.length);
+  if (start == null || end == null || start >= end) return null;
+  return { start, end, text: el.textContent ?? "" };
+}
+
 /** Rebuild a DOM Range for the given character offsets within container. */
 export function buildRange(container: HTMLElement, start: number, end: number): Range | null {
   const idx = getIndex(container);

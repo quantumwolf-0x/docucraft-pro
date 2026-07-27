@@ -963,6 +963,71 @@
   background-color: color-mix(in oklab, var(--primary) 30%, transparent);
 }
 
+/* Opening a saved item scrolls to it and flashes it once, so the reader can see
+   which passage the star pointed at without it being permanently marked. */
+::highlight(dc-saved-flash) {
+  background-color: color-mix(in oklab, var(--gold) 40%, transparent);
+}
+.docs-saved-flash {
+  animation: docs-saved-flash 1.8s ease-out 1;
+  border-radius: 0.5rem;
+}
+@keyframes docs-saved-flash {
+  0%,
+  55% {
+    background-color: color-mix(in oklab, var(--gold) 22%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--gold) 30%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+/* Star affordance on block elements (tables, code, quotes, images). Hidden
+   until the block is hovered — or always visible once the block is saved. */
+.docs-savable {
+  position: relative;
+}
+.docs-save-star {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.75rem;
+  width: 1.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background-color: color-mix(in oklab, var(--background) 85%, transparent);
+  color: var(--muted-foreground);
+  opacity: 0;
+  backdrop-filter: blur(4px);
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
+}
+.docs-savable:hover > .docs-save-star,
+.docs-save-star:focus-visible,
+.docs-save-star[data-saved="true"] {
+  opacity: 1;
+}
+.docs-save-star:hover {
+  color: var(--foreground);
+}
+/* Code fences already carry a Copy button in that corner. */
+.docs-savable-code > .docs-save-star {
+  top: 0.875rem;
+  right: 5.5rem;
+}
+@media (max-width: 768px) {
+  .docs-save-star {
+    opacity: 1;
+  }
+}
+
 /* Interactive markdown blocks: a compact workbench that keeps authored code
    beside the result without allowing demo styles to touch the document. */
 .interactive-block {

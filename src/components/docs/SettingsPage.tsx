@@ -20,6 +20,7 @@ import { AiSettings } from "./ai/AiSettings";
 import type { Highlight } from "@/lib/dom-highlighter";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ThemePref, ReadingMode, ReadingFont } from "@/lib/persistence";
+import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-items";
 import { STORAGE_QUOTA_FRACTION, formatBytes } from "@/lib/storage-limits";
 
 export interface SettingsPageProps {
@@ -28,9 +29,10 @@ export interface SettingsPageProps {
   onRenameWorkspace: (id: string, name: string) => void;
   onDeleteWorkspace: (id: string) => void;
   onClearStorage: () => void;
-  bookmarks: { fileId: string; subtopicId: string; name: string }[];
-  onRemoveBookmark: (fileId: string, subtopicId: string) => void;
-  onClearBookmarks: () => void;
+  saved: SavedEntry[];
+  onOpenSaved: (item: SavedItem) => void;
+  onRemoveSaved: (id: string) => void;
+  onClearSaved: () => void;
   highlights: Highlight[];
   onRemoveHighlight: (id: string) => void;
   onClearHighlights: () => void;
@@ -52,9 +54,10 @@ export function SettingsPage({
   onRenameWorkspace,
   onDeleteWorkspace,
   onClearStorage,
-  bookmarks,
-  onRemoveBookmark,
-  onClearBookmarks,
+  saved,
+  onOpenSaved,
+  onRemoveSaved,
+  onClearSaved,
   highlights,
   onRemoveHighlight,
   onClearHighlights,
@@ -144,11 +147,11 @@ export function SettingsPage({
                 onDelete={onDeleteWorkspace}
                 onOpenWorkspace={onOpenWorkspace}
               />
-              <BookmarkSettings
-                bookmarks={bookmarks}
-                onRemove={onRemoveBookmark}
-                onClearAll={onClearBookmarks}
-                onNavigate={onNavigate}
+              <SavedSettings
+                saved={saved}
+                onOpen={onOpenSaved}
+                onRemove={onRemoveSaved}
+                onClearAll={onClearSaved}
               />
               <HighlightSettings
                 highlights={highlights}
@@ -615,28 +618,30 @@ function StorageSettings({ onClearStorage }: { onClearStorage: () => void }) {
   );
 }
 
-function BookmarkSettings({
-  bookmarks,
+function SavedSettings({
+  saved,
+  onOpen,
   onRemove,
   onClearAll,
-  onNavigate,
 }: {
-  bookmarks: { fileId: string; subtopicId: string; name: string }[];
-  onRemove: (fileId: string, subtopicId: string) => void;
+  saved: SavedEntry[];
+  onOpen: (item: SavedItem) => void;
+  onRemove: (id: string) => void;
   onClearAll: () => void;
-  onNavigate: (fileId: string, subtopicId?: string) => void;
 }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold">Bookmarks</h2>
-          <p className="text-sm text-muted-foreground">Manage your saved chapters and topics.</p>
+          <h2 className="text-lg font-semibold">Saved</h2>
+          <p className="text-sm text-muted-foreground">
+            Documents, sections, tables, code blocks and quotes you starred.
+          </p>
         </div>
-        {bookmarks.length > 0 && (
+        {saved.length > 0 && (
           <button
             onClick={() => {
-              if (window.confirm("Clear all bookmarks?")) onClearAll();
+              if (window.confirm("Clear all saved items?")) onClearAll();
             }}
             className="text-sm font-medium text-destructive hover:underline"
           >
@@ -645,32 +650,39 @@ function BookmarkSettings({
         )}
       </div>
 
-      {bookmarks.length === 0 ? (
+      {saved.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          You haven't added any bookmarks yet.
+          You haven't saved anything yet.
         </div>
       ) : (
         <div className="divide-y divide-border rounded-xl border border-border bg-card shadow-sm">
-          {bookmarks.map((b) => (
+          {saved.map((item) => (
             <div
-              key={`${b.fileId}-${b.subtopicId}`}
-              className="flex items-center justify-between p-4 transition-colors hover:bg-accent/50"
+              key={item.id}
+              className="flex items-center justify-between gap-3 p-4 transition-colors hover:bg-accent/50"
             >
               <button
-                onClick={() => onNavigate(b.fileId, b.subtopicId)}
-                className="flex items-center gap-3 text-left"
+                onClick={() => onOpen(item)}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                title={item.text || item.title}
               >
-                <div className="rounded bg-primary/10 p-1.5 text-primary">
+                <div className="shrink-0 rounded bg-primary/10 p-1.5 text-primary">
                   <Star className="h-4 w-4 fill-gold text-gold" />
                 </div>
-                <span className="text-sm font-medium text-foreground hover:text-primary transition-colors">
-                  {b.name}
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-foreground transition-colors hover:text-primary">
+                    {item.title}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                    {savedTypeLabel(item)} · {item.fileName}
+                    {item.orphaned ? " · no longer in the document" : ""}
+                  </span>
                 </span>
               </button>
               <button
-                onClick={() => onRemove(b.fileId, b.subtopicId)}
-                className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                aria-label="Remove bookmark"
+                onClick={() => onRemove(item.id)}
+                className="shrink-0 rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                aria-label="Remove saved item"
               >
                 <Trash2 className="h-4 w-4" />
               </button>

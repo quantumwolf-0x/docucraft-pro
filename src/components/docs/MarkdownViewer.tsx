@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import gsap from "gsap";
 import ReactMarkdown from "react-markdown";
@@ -53,9 +53,17 @@ import {
   releaseTextIndex,
   contextAround,
   findAnchor,
+  nodeOffsets,
   sameQuote,
   textBetween,
 } from "@/lib/text-offsets";
+import {
+  findSaved,
+  savedExcerpt,
+  type SavedBlockType,
+  type SavedDraft,
+  type SavedItem,
+} from "@/lib/saved-items";
 import { locateInSource, caretTop } from "@/lib/source-locate";
 import { splitIntoSubtopics, headingChunkMap } from "@/lib/markdown-utils";
 import { InlineArtifact } from "./InlineArtifact";
@@ -100,6 +108,17 @@ interface Props {
    * highlights had to be re-located. Persisted, but not as an undoable step.
    */
   onRepairHighlights?: (patches: Array<{ id: string; patch: Partial<Highlight> }>) => void;
+  /** Saved items (stars) for this file. */
+  saved?: SavedItem[];
+  /** Star or unstar a section or a block (table, code fence, quote, image). */
+  onToggleSaved?: (draft: SavedDraft) => void;
+  onRemoveSaved?: (id: string) => void;
+  /**
+   * A saved item the reader just opened from the Saved list: scroll to it and
+   * flash it once, then call `onSavedShown` so it isn't replayed on re-render.
+   */
+  pendingSaved?: SavedItem | null;
+  onSavedShown?: () => void;
   onHome?: () => void;
   workspaceId?: string | null;
   workspaceRevision?: string;
@@ -107,6 +126,8 @@ interface Props {
   workspaceName?: string;
   onOpenArtifact?: (fileId: string, workspaceId: string) => void;
   onRemoveFile?: () => void;
+  /** Copy a share link to this one file. Hidden when omitted. */
+  onShareFile?: () => void;
   readingMode?: ReadingMode;
   onToggleReadingMode?: () => void;
   /** Open the Ask AI panel prefilled from the current selection. */
@@ -114,6 +135,30 @@ interface Props {
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
+
+/**
+ * Star affordances live deep inside the rendered markdown (a heading, a table,
+ * a code block), far from the state that knows what is starred. They read it
+ * through this context rather than through props so that saving something
+ * re-renders the stars alone — passing `saved` into the `components` memo would
+ * rebuild every renderer and re-render the whole document on each star.
+ */
+interface SavedContextValue {
+  /** The element offsets are measured against (the rendered page). */
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Page the reader is on; undefined in single-page mode (whole-doc offsets). */
+  subtopicId?: string;
+  isSaved: (probe: {
+    kind: SavedItem["kind"];
+    headingId?: string;
+    text?: string;
+  }) => SavedItem | undefined;
+  toggle: (draft: SavedDraft) => void;
+  remove: (id: string) => void;
+  enabled: boolean;
+}
+
+const SavedContext = createContext<SavedContextValue | null>(null);
 
 export function MarkdownViewer({
   file,
@@ -131,6 +176,11 @@ export function MarkdownViewer({
   onUpdateHighlight,
   onRemoveHighlight,
   onRepairHighlights,
+  saved = [],
+  onToggleSaved,
+  onRemoveSaved,
+  pendingSaved,
+  onSavedShown,
   onHome,
   workspaceId,
   workspaceRevision,
@@ -138,6 +188,7 @@ export function MarkdownViewer({
   workspaceName,
   onOpenArtifact,
   onRemoveFile,
+  onShareFile,
   readingMode = "paginated",
   onToggleReadingMode,
   onAskAi,
@@ -150,6 +201,7 @@ export function MarkdownViewer({
   const [editMode, setEditMode] = useState(false);
   const [presentMode, setPresentMode] = useState(false);
   const [draft, setDraft] = useState(file.content);
+  const originalContentRef = useRef(file.content);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -271,6 +323,85 @@ export function MarkdownViewer({
     setMenu({ mode: "edit", hl, x, y, label: hl.label ?? "" });
   };
 
+  // ---- saved items (stars) ----
+  //
+  // Offsets are measured against whatever `contentRef` renders: the active
+  // section in paged mode, the whole document in single mode. A section-scoped
+  // item records which page it came from so the two spaces never mix — the same
+  // rule persistent highlights follow.
+  const savedSubtopicId = singleMode ? undefined : activeChunk.id;
+  const savedCtx = useMemo<SavedContextValue>(
+    () => ({
+      containerRef: contentRef,
+      subtopicId: savedSubtopicId,
+      enabled: !!onToggleSaved && !editMode,
+      isSaved: (probe) => findSaved(saved, { fileId: file.id, ...probe }),
+      toggle: (draft) => onToggleSaved?.(draft),
+      remove: (id) => onRemoveSaved?.(id),
+    }),
+    [saved, savedSubtopicId, onToggleSaved, onRemoveSaved, editMode, file.id],
+  );
+
+  // Opening a saved item from the Saved list: once the target page is rendered,
+  // scroll to the passage and flash it. Anchored by quote first (the document
+  // may have been edited since it was saved), by stored offsets only as a hint.
+  useEffect(() => {
+    if (!pendingSaved || editMode) return;
+    const container = contentRef.current;
+    if (!container) return;
+
+    const frame = requestAnimationFrame(() => {
+      const heading = pendingSaved.headingId
+        ? (document.getElementById(pendingSaved.headingId) as HTMLElement | null)
+        : null;
+      const image = pendingSaved.blockSrc
+        ? container.querySelector<HTMLElement>(`img[src="${CSS.escape(pendingSaved.blockSrc)}"]`)
+        : null;
+
+      let range: Range | null = null;
+      if (!heading && !image && pendingSaved.text) {
+        const anchor = findAnchor(
+          container,
+          pendingSaved.text,
+          pendingSaved.prefix,
+          pendingSaved.suffix,
+          pendingSaved.start,
+        );
+        range = anchor ? buildRange(container, anchor.start, anchor.end) : null;
+        if (!range) range = firstTextRange(container, pendingSaved.text);
+      }
+
+      const target =
+        heading ??
+        image ??
+        (range
+          ? ((range.startContainer.nodeType === Node.ELEMENT_NODE
+              ? (range.startContainer as HTMLElement)
+              : range.startContainer.parentElement) ?? null)
+          : null);
+      target?.scrollIntoView({ behavior: "smooth", block: heading ? "start" : "center" });
+
+      // Flash: a text range gets a one-shot CSS highlight, a heading or image
+      // (which have no range) get the equivalent class-based pulse.
+      const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
+        | Map<string, any>
+        | undefined;
+      let clear: (() => void) | undefined;
+      if (range && CSSH && typeof (window as any).Highlight !== "undefined") {
+        CSSH.set("dc-saved-flash", new (window as any).Highlight(range));
+        clear = () => CSSH.delete("dc-saved-flash");
+      } else if (target) {
+        target.classList.add("docs-saved-flash");
+        clear = () => target.classList.remove("docs-saved-flash");
+      }
+      if (clear) setTimeout(clear, 1800);
+
+      onSavedShown?.();
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [pendingSaved, editMode, renderContent, fullRender, onSavedShown]);
+
   // "Inspect" — the reader's answer to DevTools' inspect element. Take the
   // rendered text under the pointer, find where it lives in the markdown
   // source, and drop the editor's caret on it, selected and scrolled into view.
@@ -292,6 +423,7 @@ export function MarkdownViewer({
     window.getSelection()?.removeAllRanges();
     setInspectMissed(!span);
     // The editor edits `draft`; make sure it starts from what's on screen.
+    originalContentRef.current = file.content;
     setDraft(file.content);
     setEditMode(true);
     setPendingSelect(span ?? { start: Math.max(0, chunkStart), end: Math.max(0, chunkStart) });
@@ -697,8 +829,16 @@ export function MarkdownViewer({
         }
         return <p {...p}>{walkChildren(p.children)}</p>;
       },
-      blockquote: (p: any) => <Callout {...p} />,
-      pre: (p: any) => <CodeBlock {...p} />,
+      blockquote: (p: any) => (
+        <SavableBlock blockType="quote">
+          <Callout {...p} />
+        </SavableBlock>
+      ),
+      pre: (p: any) => (
+        <SavableBlock blockType="code" className="docs-savable-code">
+          <CodeBlock {...p} />
+        </SavableBlock>
+      ),
       img: (p: any) => {
         if (isArtifactUrl(p.src)) {
           return (
@@ -722,12 +862,14 @@ export function MarkdownViewer({
           return <VideoPlayer src={p.src} poster={poster} />;
         }
         return (
-          <img
-            {...p}
-            loading="lazy"
-            onClick={() => setLightbox({ src: p.src, alt: p.alt })}
-            className="cursor-zoom-in"
-          />
+          <SavableBlock blockType="image" as="span" identity={p.src} className="inline-block">
+            <img
+              {...p}
+              loading="lazy"
+              onClick={() => setLightbox({ src: p.src, alt: p.alt })}
+              className="cursor-zoom-in"
+            />
+          </SavableBlock>
         );
       },
       a: (p: any) => (
@@ -737,9 +879,11 @@ export function MarkdownViewer({
       ),
       li: (p: any) => <li {...p}>{walkChildren(p.children)}</li>,
       table: (p: any) => (
-        <div className="docs-table-wrap">
-          <table {...p} />
-        </div>
+        <SavableBlock blockType="table">
+          <div className="docs-table-wrap">
+            <table {...p} />
+          </div>
+        </SavableBlock>
       ),
       td: (p: any) => <td {...p}>{walkChildren(p.children)}</td>,
       th: (p: any) => <th {...p}>{walkChildren(p.children)}</th>,
@@ -835,6 +979,16 @@ export function MarkdownViewer({
                 >
                   <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
                 </button>
+                {!editMode && onShareFile && (
+                  <button
+                    onClick={onShareFile}
+                    title="Copy a share link to this file"
+                    aria-label="Share this file"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Share className="h-4 w-4" />
+                  </button>
+                )}
                 {!editMode && onToggleReadingMode && (
                   <button
                     onClick={onToggleReadingMode}
@@ -859,7 +1013,11 @@ export function MarkdownViewer({
                 )}
                 {!editMode && (
                   <button
-                    onClick={() => setEditMode(true)}
+                    onClick={() => {
+                      originalContentRef.current = file.content;
+                      setDraft(file.content);
+                      setEditMode(true);
+                    }}
                     title="Edit document"
                     className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   >
@@ -880,6 +1038,12 @@ export function MarkdownViewer({
                       <Star className={`mr-2 h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
                       {isBookmarked ? "Unstar" : "Star"}
                     </DropdownMenuItem>
+                    {!editMode && onShareFile && (
+                      <DropdownMenuItem onClick={onShareFile}>
+                        <Share className="mr-2 h-4 w-4" />
+                        Share this file
+                      </DropdownMenuItem>
+                    )}
                     {!editMode && onToggleReadingMode && (
                       <DropdownMenuItem onClick={onToggleReadingMode}>
                         <Files className="mr-2 h-4 w-4" />
@@ -893,7 +1057,11 @@ export function MarkdownViewer({
                       </DropdownMenuItem>
                     )}
                     {!editMode && (
-                      <DropdownMenuItem onClick={() => setEditMode(true)}>
+                      <DropdownMenuItem onClick={() => {
+                        originalContentRef.current = file.content;
+                        setDraft(file.content);
+                        setEditMode(true);
+                      }}>
                         <Pencil className="mr-2 h-4 w-4" />
                         Edit document
                       </DropdownMenuItem>
@@ -1139,12 +1307,24 @@ export function MarkdownViewer({
                 <span className="truncate text-xs font-medium text-muted-foreground">
                   Editing — changes save automatically
                 </span>
-                <button
-                  onClick={() => setEditMode(false)}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95"
-                >
-                  <Eye className="h-3.5 w-3.5" /> Done · Preview
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setDraft(originalContentRef.current);
+                      onContentChange(file.id, originalContentRef.current);
+                      setEditMode(false);
+                    }}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition-opacity hover:bg-muted/80 active:scale-95 border border-border"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => setEditMode(false)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95"
+                  >
+                    <Eye className="h-3.5 w-3.5" /> Done · Preview
+                  </button>
+                </div>
               </div>
               {inspectMissed && (
                 <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
@@ -1167,17 +1347,19 @@ export function MarkdownViewer({
               onClick={onContentClick}
               className={presentMode ? "animate-in fade-in slide-in-from-bottom-4 duration-500 fill-mode-forwards" : ""}
             >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath, remarkInteractiveBlockMeta]}
-                rehypePlugins={[
-                  rehypeSlug,
-                  rehypeKatex,
-                  [rehypeHighlight, { detect: true, ignoreMissing: true }],
-                ]}
-                components={components}
-              >
-                {singleMode ? fullRender : renderContent}
-              </ReactMarkdown>
+              <SavedContext.Provider value={savedCtx}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkMath, remarkInteractiveBlockMeta]}
+                  rehypePlugins={[
+                    rehypeSlug,
+                    rehypeKatex,
+                    [rehypeHighlight, { detect: true, ignoreMissing: true }],
+                  ]}
+                  components={components}
+                >
+                  {singleMode ? fullRender : renderContent}
+                </ReactMarkdown>
+              </SavedContext.Provider>
             </div>
           )}
 
@@ -1264,15 +1446,127 @@ export function MarkdownViewer({
 
 
 
+/**
+ * Wraps a block (table, code fence, quote, image) with a hover star that saves
+ * it. The block's own rendered text is the quote the saved item re-anchors by,
+ * so a saved table is still findable after the document around it is edited.
+ */
+function SavableBlock({
+  blockType,
+  as: Wrapper = "div",
+  className = "",
+  identity,
+  children,
+}: {
+  blockType: SavedBlockType;
+  as?: "div" | "span";
+  className?: string;
+  /** Stands in for the text of blocks that have none — an image's src. */
+  identity?: string;
+  children: React.ReactNode;
+}) {
+  const ctx = useContext(SavedContext);
+  const ref = useRef<HTMLDivElement & HTMLSpanElement>(null);
+  const [text, setText] = useState("");
+
+  // No dependency array on purpose: the block's text changes whenever the
+  // document is edited, and the star has to keep pointing at the new text. The
+  // update is idempotent, so it settles after one extra render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const next = ref.current?.textContent?.trim() ?? "";
+    setText((prev) => (prev === next ? prev : next));
+  });
+
+  if (!ctx?.enabled) return <>{children}</>;
+
+  const probe = text || identity || "";
+  const existing = ctx.isSaved({ kind: "block", text: probe });
+
+  const toggle = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (existing) {
+      ctx.remove(existing.id);
+      return;
+    }
+    const container = ctx.containerRef.current;
+    const el = ref.current;
+    const offsets = container && el ? nodeOffsets(container, el) : null;
+    const quote = offsets?.text.trim() || probe;
+    ctx.toggle({
+      kind: "block",
+      blockType,
+      title: savedExcerpt(quote || identity || blockType, 90),
+      text: quote || undefined,
+      blockSrc: blockType === "image" ? identity : undefined,
+      subtopicId: ctx.subtopicId,
+      ...(offsets && container
+        ? {
+            start: offsets.start,
+            end: offsets.end,
+            ...contextAround(container, offsets.start, offsets.end),
+          }
+        : null),
+    });
+  };
+
+  return (
+    <Wrapper ref={ref} className={`docs-savable ${className}`.trim()}>
+      {children}
+      <button
+        type="button"
+        onClick={toggle}
+        data-saved={existing ? "true" : "false"}
+        className="docs-save-star"
+        title={existing ? "Saved — click to remove" : `Save this ${blockType}`}
+        aria-label={existing ? `Remove saved ${blockType}` : `Save ${blockType}`}
+      >
+        <Star className={`h-3.5 w-3.5 ${existing ? "fill-gold text-gold" : ""}`} />
+      </button>
+    </Wrapper>
+  );
+}
+
 function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
   const [copied, setCopied] = useState(false);
+  const ctx = useContext(SavedContext);
   const text = Array.isArray(children)
     ? children.map((c) => (typeof c === "string" ? c : "")).join("")
     : String(children ?? "");
   const finalId = id || slugify(text);
+  const savedSection = ctx?.enabled
+    ? ctx.isSaved({ kind: "section", headingId: finalId })
+    : undefined;
   return (
     <Tag id={finalId} {...rest} className="group scroll-mt-24">
       {typeof children === "string" ? (highlight?.(children) ?? children) : children}
+      {ctx?.enabled && (
+        <button
+          onClick={() => {
+            if (savedSection) {
+              ctx.remove(savedSection.id);
+              return;
+            }
+            ctx.toggle({
+              kind: "section",
+              title: text || finalId,
+              headingId: finalId,
+              subtopicId: ctx.subtopicId,
+              text: text || undefined,
+            });
+          }}
+          className={`ml-2 inline-flex items-center align-middle transition-opacity group-hover:opacity-100 ${
+            savedSection ? "opacity-100" : "opacity-0"
+          }`}
+          title={savedSection ? "Saved — click to remove" : "Save this section"}
+          aria-label={savedSection ? "Remove saved section" : "Save section"}
+        >
+          <Star
+            className={`h-4 w-4 ${savedSection ? "fill-gold text-gold" : "text-muted-foreground"}`}
+          />
+        </button>
+      )}
       <button
         onClick={() => {
           const url = `${window.location.origin}${window.location.pathname}#${finalId}`;

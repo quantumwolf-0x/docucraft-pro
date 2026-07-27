@@ -1,3 +1,126 @@
+// Share links. Two shapes exist, both carrying only a short bytebin key in the
+// URL so a large document survives being pasted into a chat client:
+//
+//   #share=<key>        a whole workspace — imported on load, no questions asked
+//   #share-files=<key>  a hand-picked set of files — the recipient chooses
+//                       between a new workspace and the one they are already in
+//
+// Older links carry the compressed payload inline instead of a key; `fetchShare`
+// still reads those.
+
+import type { PersistedFile } from "./persistence";
+
+const BYTEBIN_URL = "https://bytebin.lucko.me";
+
+export const SHARE_HASH = "#share=";
+export const SHARE_FILES_HASH = "#share-files=";
+
+export interface SharedFilesPayload {
+  format: "localdox-files";
+  version: 1;
+  /** Workspace the files came from — the default name for a new workspace. */
+  sourceName: string;
+  sharedAt: number;
+  files: PersistedFile[];
+}
+
+export function serializeSharedFiles(files: PersistedFile[], sourceName: string): string {
+  const payload: SharedFilesPayload = {
+    format: "localdox-files",
+    version: 1,
+    sourceName: sourceName?.trim() || "Shared files",
+    sharedAt: Date.now(),
+    files: files.map((f) => ({
+      id: f.id,
+      name: f.name,
+      content: f.content,
+      data: f.data,
+      mimeType: f.mimeType,
+      size: f.size,
+      addedAt: f.addedAt,
+      kind: f.kind,
+    })),
+  };
+  return JSON.stringify(payload);
+}
+
+/** Parse a `#share-files=` payload. Throws when it isn't one. */
+export function parseSharedFiles(json: string): SharedFilesPayload {
+  const data = JSON.parse(json);
+  if (!data || !Array.isArray(data.files)) throw new Error("Not a shared file link");
+  const files: PersistedFile[] = data.files
+    .filter((f: any) => f && typeof f.content === "string")
+    .map((f: any) => ({
+      id: typeof f.id === "string" ? f.id : crypto.randomUUID(),
+      name: typeof f.name === "string" && f.name.trim() ? f.name : "untitled.md",
+      content: f.content,
+      data: typeof f.data === "string" ? f.data : undefined,
+      mimeType: typeof f.mimeType === "string" ? f.mimeType : undefined,
+      size: typeof f.size === "number" ? f.size : undefined,
+      addedAt: typeof f.addedAt === "number" ? f.addedAt : undefined,
+      kind: typeof f.kind === "string" ? f.kind : undefined,
+    }));
+  if (files.length === 0) throw new Error("Shared link contains no readable files");
+  return {
+    format: "localdox-files",
+    version: 1,
+    sourceName:
+      typeof data.sourceName === "string" && data.sourceName.trim()
+        ? data.sourceName
+        : "Shared files",
+    sharedAt: typeof data.sharedAt === "number" ? data.sharedAt : Date.now(),
+    files,
+  };
+}
+
+/** Put a JSON payload on bytebin; returns the key that goes in the link hash. */
+export async function uploadShare(json: string): Promise<string> {
+  const res = await fetch(`${BYTEBIN_URL}/post`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: json,
+  });
+  if (!res.ok) throw new Error("Failed to upload share payload");
+  const data = await res.json();
+  if (!data?.key) throw new Error("Share upload returned no key");
+  return data.key as string;
+}
+
+/**
+ * Read what a share hash points at. Short values are bytebin keys; anything
+ * longer is a legacy inline payload.
+ */
+export async function fetchShare(keyOrData: string): Promise<string> {
+  if (keyOrData.length < 50) {
+    const res = await fetch(`${BYTEBIN_URL}/${keyOrData}`);
+    if (!res.ok) throw new Error("Failed to fetch from bytebin");
+    return res.text();
+  }
+  return decodeAndDecompress(keyOrData);
+}
+
+/** Clipboard write with a fallback for browsers/contexts without the async API. */
+export async function copyLink(url: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(url);
+    return;
+  } catch {
+    // Insecure context or a denied permission — fall through to the old trick.
+  }
+  const field = document.createElement("textarea");
+  field.value = url;
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.appendChild(field);
+  field.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    document.body.removeChild(field);
+  }
+}
+
 export function base64UrlEncode(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = "";

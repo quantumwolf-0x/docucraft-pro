@@ -31,6 +31,7 @@ export interface PersistedUI {
 }
 
 import type { Highlight } from "./dom-highlighter";
+import type { SavedItem } from "./saved-items";
 
 export interface WorkspaceRecord {
   id: string;
@@ -38,8 +39,13 @@ export interface WorkspaceRecord {
   createdAt: number;
   updatedAt: number;
   files: PersistedFile[];
-  // Bookmarked file ids, shown on the home page.
+  /**
+   * Legacy `${fileId}#${subtopicId}` stars. Still written so a downgrade keeps
+   * working, but `saved` is the source of truth — see `migrateBookmarks`.
+   */
   bookmarks: string[];
+  /** Stars on files, sections, blocks and selections. */
+  saved?: SavedItem[];
   highlights?: Highlight[];
   ui: PersistedUI;
 }
@@ -148,6 +154,7 @@ export function newWorkspaceRecord(name: string): WorkspaceRecord {
     updatedAt: now,
     files: [],
     bookmarks: [],
+    saved: [],
     highlights: [],
     ui: emptyUI(),
   };

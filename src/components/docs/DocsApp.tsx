@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, Navigate } from "@tanstack/react-router";
 import gsap from "gsap";
 import {
@@ -41,13 +41,34 @@ import {
   serializeWorkspace,
   parseWorkspaceImport,
   isDarkTheme,
+  type PersistedFile,
   type WorkspaceRecord,
   type SaveStatus,
   type ThemePref,
   type ReadingMode,
   type ReadingFont,
 } from "@/lib/persistence";
-import { compressAndEncode, decodeAndDecompress } from "@/lib/share";
+import {
+  findSaved,
+  migrateBookmarks,
+  newSavedId,
+  savedKey,
+  toLegacyBookmarks,
+  type SavedDraft,
+  type SavedEntry,
+  type SavedItem,
+} from "@/lib/saved-items";
+import {
+  copyLink,
+  fetchShare,
+  parseSharedFiles,
+  serializeSharedFiles,
+  uploadShare,
+  SHARE_HASH,
+  SHARE_FILES_HASH,
+  type SharedFilesPayload,
+} from "@/lib/share";
+import { SharedFilesDialog } from "./SharedFilesDialog";
 import { MAX_UPLOAD_BYTES, getMaxStorageBytes, formatBytes } from "@/lib/storage-limits";
 
 type Theme = ThemePref;
@@ -69,6 +90,39 @@ interface WorkspaceLite {
   id: string;
   name: string;
   docCount?: number;
+}
+
+/**
+ * Stored file → in-memory file. Headings and subtopics are only parsed for the
+ * text-shaped kinds; everything else is rendered from its bytes.
+ */
+function toMdFile(f: PersistedFile): MdFile {
+  const kind = f.kind ?? getDocumentKind(f.name, f.mimeType);
+  const textual = kind === "markdown" || kind === "text";
+  return {
+    id: f.id,
+    name: f.name,
+    content: f.content,
+    data: f.data,
+    mimeType: f.mimeType,
+    size: f.size,
+    addedAt: f.addedAt,
+    kind,
+    headings: textual ? parseHeadings(f.content, f.id) : [],
+    subtopics: textual ? splitIntoSubtopics(f.content, f.name) : [],
+  };
+}
+
+/** `report.md` → `report (2).md` when the workspace already holds that name. */
+function uniqueFileName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  for (let n = 2; ; n++) {
+    const candidate = `${stem} (${n})${ext}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 export function DocsApp() {
@@ -93,7 +147,12 @@ export function DocsApp() {
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [bookmarks, setBookmarks] = useState<string[]>([]);
+  // Stars. Not just files any more: a star can point at a section, a table, a
+  // code block or a passage the reader selected. Legacy `${fileId}#${sectionId}`
+  // bookmarks are read as saved items on hydrate (see `migrateBookmarks`).
+  const [saved, setSaved] = useState<SavedItem[]>([]);
+  /** A saved item the reader just opened — handed to the viewer to scroll to. */
+  const [pendingSaved, setPendingSaved] = useState<SavedItem | null>(null);
   // Highlights are the one reader action with no other way back — a mis-drag
   // silently replaces whatever it overlaps — so they get an undo stack.
   // `resetHighlights` loads a workspace without making the previous one's
@@ -111,6 +170,10 @@ export function DocsApp() {
   // File whose highlights are shown in isolation via the "Show highlights only"
   // menu item; null when the modal is closed.
   const [highlightsOnlyFileId, setHighlightsOnlyFileId] = useState<string | null>(null);
+  // Files arriving from a `#share-files=` link, held until the reader picks
+  // between a new workspace and the one they already have open.
+  const [incomingShare, setIncomingShare] = useState<SharedFilesPayload | null>(null);
+  const [importingShare, setImportingShare] = useState(false);
   // Ask AI panel: open state + the selection/action it was seeded from.
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrefill, setAiPrefill] = useState<AskAiPrefill | null>(null);
@@ -138,7 +201,7 @@ export function DocsApp() {
     activeFileId,
     expanded,
     sidebarCollapsed,
-    bookmarks,
+    saved,
     highlights,
     recentFileIds,
   });
@@ -147,7 +210,7 @@ export function DocsApp() {
     activeFileId,
     expanded,
     sidebarCollapsed,
-    bookmarks,
+    saved,
     highlights,
     recentFileIds,
   };
@@ -269,9 +332,13 @@ export function DocsApp() {
         data: f.data,
         mimeType: f.mimeType,
         size: f.size,
+        addedAt: f.addedAt,
         kind: f.kind,
       })),
-      bookmarks: s.bookmarks,
+      // `bookmarks` is the legacy projection of `saved`, still written so an
+      // older build reading this workspace keeps its file/section stars.
+      bookmarks: toLegacyBookmarks(s.saved),
+      saved: s.saved,
       highlights: s.highlights,
       ui: {
         activeFileId: s.activeFileId,
@@ -306,25 +373,7 @@ export function DocsApp() {
   }, [persistNow]);
 
   const hydrateWorkspace = useCallback((ws: WorkspaceRecord) => {
-    let parsed: MdFile[] = ws.files.map((f) => ({
-      id: f.id,
-      name: f.name,
-      content: f.content,
-      data: f.data,
-      mimeType: f.mimeType,
-      size: f.size,
-      kind: f.kind ?? getDocumentKind(f.name, f.mimeType),
-      headings:
-        getDocumentKind(f.name, f.mimeType) === "markdown" ||
-        getDocumentKind(f.name, f.mimeType) === "text"
-          ? parseHeadings(f.content, f.id)
-          : [],
-      subtopics:
-        getDocumentKind(f.name, f.mimeType) === "markdown" ||
-        getDocumentKind(f.name, f.mimeType) === "text"
-          ? splitIntoSubtopics(f.content, f.name)
-          : [],
-    }));
+    const parsed: MdFile[] = ws.files.map(toMdFile);
 
     if (ws.ui?.fileOrder && ws.ui.fileOrder.length > 0) {
       const order = ws.ui.fileOrder;
@@ -343,7 +392,7 @@ export function DocsApp() {
     setRecentFileIds(ws.ui?.recentFileIds ?? []);
     setExpanded(ws.ui?.expanded ?? {});
     setSidebarCollapsed(!!ws.ui?.sidebarCollapsed);
-    setBookmarks(ws.bookmarks ?? []);
+    setSaved(ws.saved?.length ? ws.saved : migrateBookmarks(ws.bookmarks ?? [], parsed));
     resetHighlights((ws.highlights ?? []).filter((h) => typeof h.text === "string"));
     setWorkspaceId(ws.id);
     workspaceIdRef.current = ws.id;
@@ -378,20 +427,9 @@ export function DocsApp() {
         firstVisitRef.current = !prefs.name;
 
         let hashSharedWs: WorkspaceRecord | null = null;
-        if (window.location.hash.startsWith("#share=")) {
+        if (window.location.hash.startsWith(SHARE_HASH)) {
           try {
-            let json = "";
-            const keyOrData = window.location.hash.replace("#share=", "");
-            // Support legacy encoded strings (they typically don't look like short keys,
-            // but we can just try fetching it. If it fails, fallback to decodeAndDecompress)
-            if (keyOrData.length < 50) {
-              const res = await fetch(`https://bytebin.lucko.me/${keyOrData}`);
-              if (!res.ok) throw new Error("Failed to fetch from bytebin");
-              json = await res.text();
-            } else {
-              json = await decodeAndDecompress(keyOrData);
-            }
-
+            const json = await fetchShare(window.location.hash.slice(SHARE_HASH.length));
             const ws = parseWorkspaceImport(json);
             ws.id = crypto.randomUUID();
             ws.name = `${ws.name} (Shared)`;
@@ -819,10 +857,26 @@ export function DocsApp() {
     markDirty();
   }, [markDirty]);
 
-  const toggleBookmark = useCallback(
-    (fileId: string, subtopicId: string) => {
-      const id = `${fileId}#${subtopicId}`;
-      setBookmarks((prev) => (prev.includes(id) ? prev.filter((b) => b !== id) : [...prev, id]));
+  // Star or unstar one thing. Identity is what the star points at (file,
+  // section anchor, or the passage's text), never a generated id — re-saving
+  // the same table has to find the existing star, not add a second one.
+  const toggleSaved = useCallback(
+    (fileId: string, draft: SavedDraft) => {
+      setSaved((prev) => {
+        const key = savedKey({ fileId, ...draft });
+        const hit = prev.find((s) => savedKey(s) === key);
+        return hit
+          ? prev.filter((s) => s.id !== hit.id)
+          : [...prev, { ...draft, id: newSavedId(), fileId, createdAt: Date.now() }];
+      });
+      markDirty();
+    },
+    [markDirty],
+  );
+
+  const removeSaved = useCallback(
+    (id: string) => {
+      setSaved((prev) => prev.filter((s) => s.id !== id));
       markDirty();
     },
     [markDirty],
@@ -989,20 +1043,9 @@ export function DocsApp() {
   const shareWorkspace = useCallback(async () => {
     try {
       toast.loading("Generating share link...", { id: "share-workspace" });
-      const rec = buildRecord();
-      const json = serializeWorkspace(rec);
-      const res = await fetch("https://bytebin.lucko.me/post", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: json,
-      });
-      if (!res.ok) throw new Error("Failed to upload workspace to pastebin");
-      const data = await res.json();
-      const url = `${window.location.origin}${window.location.pathname}#share=${data.key}`;
-      await navigator.clipboard.writeText(url);
+      const key = await uploadShare(serializeWorkspace(buildRecord()));
+      const url = `${window.location.origin}${window.location.pathname}${SHARE_HASH}${key}`;
+      await copyLink(url);
       toast.success("Workspace link copied to clipboard!", { id: "share-workspace" });
     } catch (e) {
       console.error(e);
@@ -1011,6 +1054,172 @@ export function DocsApp() {
       });
     }
   }, [buildRecord]);
+
+  /**
+   * Share one file or a hand-picked set of them. Unlike the workspace link,
+   * this one asks the recipient where the files should land — see
+   * `SharedFilesDialog` and `acceptSharedFiles`.
+   */
+  const shareFiles = useCallback(async (fileIds: string[]) => {
+    const picked = snapshotRef.current.files.filter((f) => fileIds.includes(f.id));
+    if (picked.length === 0) return;
+    const label = picked.length === 1 ? `“${picked[0].name}”` : `${picked.length} files`;
+    try {
+      toast.loading(`Generating link for ${label}...`, { id: "share-files" });
+      const json = serializeSharedFiles(
+        picked.map((f) => ({
+          id: f.id,
+          name: f.name,
+          content: f.content,
+          data: f.data,
+          mimeType: f.mimeType,
+          size: f.size,
+          addedAt: f.addedAt,
+          kind: f.kind,
+        })),
+        workspaceNameRef.current,
+      );
+      const key = await uploadShare(json);
+      const url = `${window.location.origin}${window.location.pathname}${SHARE_FILES_HASH}${key}`;
+      await copyLink(url);
+      toast.success(`Link to ${label} copied to clipboard!`, { id: "share-files" });
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to generate share link. The files might be too large.", {
+        id: "share-files",
+      });
+    }
+  }, []);
+
+  const shareFile = useCallback((fileId: string) => void shareFiles([fileId]), [shareFiles]);
+
+  // ---- receiving a #share-files= link ----
+  //
+  // Nothing is written on arrival: the payload is held here until the reader
+  // picks a destination in SharedFilesDialog.
+
+  const loadIncomingShare = useCallback(async () => {
+    const hash = window.location.hash;
+    if (!hash.startsWith(SHARE_FILES_HASH)) return;
+    // Drop the hash first, so a refresh or a failed fetch doesn't re-prompt.
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    try {
+      toast.loading("Opening shared files...", { id: "incoming-share" });
+      const json = await fetchShare(hash.slice(SHARE_FILES_HASH.length));
+      setIncomingShare(parseSharedFiles(json));
+      toast.dismiss("incoming-share");
+    } catch (e) {
+      console.error("Failed to read shared files link", e);
+      toast.error("Invalid or expired shared files link.", { id: "incoming-share" });
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadIncomingShare();
+    // A link opened from another tab on this origin only changes the hash.
+    const onHashChange = () => void loadIncomingShare();
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [loadIncomingShare]);
+
+  const acceptSharedFiles = useCallback(
+    async (target: "new" | "current", fileIds: string[], newName: string) => {
+      const payload = incomingShare;
+      if (!payload) return;
+      const picked = payload.files.filter((f) => fileIds.includes(f.id));
+      if (picked.length === 0) return;
+
+      setImportingShare(true);
+      try {
+        // The same file can arrive twice (re-shared, or shared back); fresh ids
+        // keep both copies addressable.
+        const stamped: PersistedFile[] = picked.map((f) => ({
+          ...f,
+          id: crypto.randomUUID(),
+          addedAt: f.addedAt ?? Date.now(),
+        }));
+
+        const incomingBytes = stamped.reduce((sum, f) => sum + (f.size ?? f.content.length), 0);
+        const maxStorage = await getMaxStorageBytes();
+        if (maxStorage != null) {
+          const usedBytes = snapshotRef.current.files.reduce((sum, f) => sum + (f.size ?? 0), 0);
+          if (usedBytes + incomingBytes > maxStorage) {
+            toast.error(
+              `Storage full — this application is strictly capped at ${formatBytes(maxStorage)}. Remove some files before importing shared ones.`,
+            );
+            return;
+          }
+        }
+
+        if (target === "new") {
+          await persistNow(true);
+          const ws = newWorkspaceRecord(newName.trim() || payload.sourceName);
+          ws.files = stamped;
+          ws.ui.activeFileId = stamped[0].id;
+          ws.ui.fileOrder = stamped.map((f) => f.id);
+          await persistence.putWorkspace(ws);
+          await refreshWorkspaceList();
+          hydrateWorkspace(ws);
+          savePrefs({ lastWorkspaceId: ws.id });
+        } else {
+          const taken = new Set(snapshotRef.current.files.map((f) => f.name));
+          const added = stamped.map((f) => {
+            const name = uniqueFileName(f.name, taken);
+            taken.add(name);
+            return toMdFile({ ...f, name });
+          });
+          const nextFiles = [...snapshotRef.current.files, ...added];
+          const nextActiveFileId = snapshotRef.current.activeFileId ?? added[0].id;
+
+          // Dropping into "the current workspace" before one exists (a first
+          // visit opened straight from a link) creates it, as an upload would.
+          if (!workspaceIdRef.current) {
+            const id = crypto.randomUUID();
+            workspaceIdRef.current = id;
+            workspaceNameRef.current = payload.sourceName;
+            createdAtRef.current = Date.now();
+            setWorkspaceId(id);
+            savePrefs({ lastWorkspaceId: id });
+          }
+
+          snapshotRef.current = {
+            ...snapshotRef.current,
+            files: nextFiles,
+            activeFileId: nextActiveFileId,
+          };
+          setFiles(nextFiles);
+          setActiveFileId(nextActiveFileId);
+          setSaveStatus("saving");
+          await persistence.putWorkspace(buildRecord());
+          setSaveStatus("saved");
+          await refreshWorkspaceList();
+        }
+
+        setIncomingShare(null);
+        toast.success(
+          `Added ${stamped.length} shared file${stamped.length > 1 ? "s" : ""} to ${
+            target === "new" ? newName.trim() || payload.sourceName : workspaceNameRef.current
+          }.`,
+        );
+        if (location.pathname !== "/") navigate({ to: "/" });
+      } catch (e) {
+        console.error("Failed to import shared files", e);
+        setSaveStatus("idle");
+        toast.error("Could not import the shared files. Please try again.");
+      } finally {
+        setImportingShare(false);
+      }
+    },
+    [
+      incomingShare,
+      persistNow,
+      refreshWorkspaceList,
+      hydrateWorkspace,
+      buildRecord,
+      location.pathname,
+      navigate,
+    ],
+  );
 
   const deleteWorkspace = useCallback(
     async (id: string) => {
@@ -1070,20 +1279,65 @@ export function DocsApp() {
     }
   }, []);
 
-  const bookmarkItems = bookmarks
-    .map((b) => {
-      const [fId, sId] = b.split("#");
-      const file = files.find((f) => f.id === fId);
-      if (!file) return null;
-      if (sId === "root") {
-        return { fileId: fId, subtopicId: sId, name: file.name };
-      }
-      const subs = file.subtopics || splitIntoSubtopics(file.content, file.name);
-      const sub = subs.find((s) => s.id === sId);
-      if (!sub) return null;
-      return { fileId: fId, subtopicId: sId, name: sub.title };
-    })
-    .filter(Boolean) as { fileId: string; subtopicId: string; name: string }[];
+  // Rows for the Saved list: newest first, each carrying the name of the file it
+  // came from. Stars whose file is gone are dropped rather than shown as dead
+  // rows — removing a file already removes its content.
+  const savedEntries: SavedEntry[] = useMemo(
+    () =>
+      saved
+        .map((item) => {
+          const file = files.find((f) => f.id === item.fileId);
+          return file ? { ...item, fileName: file.name } : null;
+        })
+        .filter(Boolean as unknown as (v: SavedEntry | null) => v is SavedEntry)
+        .sort((a, b) => b.createdAt - a.createdAt),
+    [saved, files],
+  );
+
+  // The header star saves whatever page the reader is on: the current section
+  // when one is selected, otherwise the document itself.
+  const activePageDraft = useCallback((): SavedDraft | null => {
+    if (!activeFile) return null;
+    if (!activeHeadingId) {
+      return { kind: "file", title: activeFile.name };
+    }
+    const chunks = activeFile.subtopics || splitIntoSubtopics(activeFile.content, activeFile.name);
+    const chunk = chunks.find((c) => c.id === activeHeadingId);
+    return {
+      kind: "section",
+      title: chunk?.title ?? activeFile.name,
+      headingId: activeHeadingId,
+      subtopicId: activeHeadingId,
+    };
+  }, [activeFile, activeHeadingId]);
+
+  const activePageSaved = activeFile
+    ? findSaved(saved, {
+        fileId: activeFile.id,
+        kind: activeHeadingId ? "section" : "file",
+        headingId: activeHeadingId ?? undefined,
+      })
+    : undefined;
+
+  const toggleActivePageSaved = useCallback(() => {
+    const draft = activePageDraft();
+    if (activeFile && draft) toggleSaved(activeFile.id, draft);
+  }, [activeFile, activePageDraft, toggleSaved]);
+
+  // Opening a star: go to its file and page first, then hand the item to the
+  // viewer, which scrolls to the passage and flashes it once it has rendered.
+  const openSaved = useCallback(
+    async (item: SavedItem) => {
+      const target = item.headingId ?? item.subtopicId ?? undefined;
+      if (showSettings) await openFromHome(item.fileId, target);
+      else handleSelect(item.fileId, target);
+      setPendingSaved(item);
+      setDrawerOpen(false);
+    },
+    // handleSelect is redefined every render; calling the latest one is correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [openFromHome, showSettings],
+  );
 
   const goHome = useCallback(() => navigate({ to: "/" }), [navigate]);
   const openSettings = useCallback(() => navigate({ to: "/settings" }), [navigate]);
@@ -1162,6 +1416,20 @@ export function DocsApp() {
     </div>
   ) : null;
 
+  // Rendered from both the empty state and the reader — a shared link can land
+  // on either.
+  const shareDialog = incomingShare ? (
+    <SharedFilesDialog
+      open
+      files={incomingShare.files}
+      sourceName={incomingShare.sourceName}
+      currentWorkspaceName={workspaceId ? workspaceNameRef.current : null}
+      busy={importingShare}
+      onDismiss={() => setIncomingShare(null)}
+      onImport={(target, ids, name) => void acceptSharedFiles(target, ids, name)}
+    />
+  ) : null;
+
   if (booting) {
     return <div className="min-h-dvh bg-background" />;
   }
@@ -1222,6 +1490,7 @@ export function DocsApp() {
           }}
         />
         {dragOverlay}
+        {shareDialog}
       </div>
     );
   }
@@ -1275,12 +1544,16 @@ export function DocsApp() {
               onRemoveFile={removeFile}
               onArchiveFile={toggleArchiveFile}
               onDownloadFile={downloadFile}
+              onShareFile={shareFile}
+              onShareFiles={(ids) => void shareFiles(ids)}
               onRenameFile={renameFile}
               onReorderFile={reorderFile}
               onSortByName={sortFilesByName}
               view={sidebarView}
               onView={setSidebarView}
-              bookmarks={bookmarkItems}
+              saved={savedEntries}
+              onOpenSaved={openSaved}
+              onRemoveSaved={removeSaved}
               theme={theme}
               onCycleTheme={cycleTheme}
               currentWorkspaceName={workspaceNameRef.current}
@@ -1293,7 +1566,6 @@ export function DocsApp() {
               }
               onClearStorage={clearAllStorage}
               highlights={highlights}
-              onRemoveBookmark={toggleBookmark}
               onRemoveHighlight={removeHighlight}
               onShowHighlights={setHighlightsOnlyFileId}
               onOpenSettings={openSettings}
@@ -1405,12 +1677,16 @@ export function DocsApp() {
                   onRemoveFile={removeFile}
                   onArchiveFile={toggleArchiveFile}
                   onDownloadFile={downloadFile}
+              onShareFile={shareFile}
+              onShareFiles={(ids) => void shareFiles(ids)}
                   onRenameFile={renameFile}
                   onReorderFile={reorderFile}
                   onSortByName={sortFilesByName}
                   view={sidebarView}
                   onView={setSidebarView}
-                  bookmarks={bookmarkItems}
+                  saved={savedEntries}
+                  onOpenSaved={openSaved}
+                  onRemoveSaved={removeSaved}
                   theme={theme}
                   onCycleTheme={cycleTheme}
                   currentWorkspaceName={workspaceNameRef.current}
@@ -1423,7 +1699,6 @@ export function DocsApp() {
                   }
                   onClearStorage={clearAllStorage}
                   highlights={highlights}
-                  onRemoveBookmark={toggleBookmark}
                   onRemoveHighlight={removeHighlight}
                   onShowHighlights={(id) => {
                     setHighlightsOnlyFileId(id);
@@ -1448,10 +1723,11 @@ export function DocsApp() {
               onRenameWorkspace={renameWorkspace}
               onDeleteWorkspace={deleteWorkspace}
               onClearStorage={clearAllStorage}
-              bookmarks={bookmarkItems}
-              onRemoveBookmark={toggleBookmark}
-              onClearBookmarks={() => {
-                setBookmarks([]);
+              saved={savedEntries}
+              onOpenSaved={openSaved}
+              onRemoveSaved={removeSaved}
+              onClearSaved={() => {
+                setSaved([]);
                 markDirty();
               }}
               highlights={highlights}
@@ -1482,18 +1758,20 @@ export function DocsApp() {
               highlightQuery={highlightQuery}
               onContentChange={handleContentChange}
               nextReadingMin={nextReadingMin}
-              isBookmarked={
-                !!activeFile && bookmarks.includes(`${activeFile.id}#${activeHeadingId || "root"}`)
-              }
-              onToggleBookmark={() =>
-                activeFile && toggleBookmark(activeFile.id, activeHeadingId || "root")
-              }
+              isBookmarked={!!activePageSaved}
+              onToggleBookmark={toggleActivePageSaved}
               highlights={highlights.filter((h) => h.fileId === activeFile.id)}
               onAddHighlight={(hl) => addHighlight(hl, activeFile.id)}
               onUpdateHighlight={updateHighlight}
               onRemoveHighlight={removeHighlight}
               onRepairHighlights={repairHighlights}
+              saved={saved.filter((s) => s.fileId === activeFile.id)}
+              onToggleSaved={(draft) => toggleSaved(activeFile.id, draft)}
+              onRemoveSaved={removeSaved}
+              pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
+              onSavedShown={() => setPendingSaved(null)}
               onHome={goHome}
+              onShareFile={() => shareFile(activeFile.id)}
               onAskAi={askAiFromSelection}
               readingMode={readingMode}
               workspaceId={workspaceId}
@@ -1505,8 +1783,10 @@ export function DocsApp() {
           ) : activeFile ? (
             <DocumentViewer
               file={activeFile}
-              isBookmarked={bookmarks.includes(`${activeFile.id}#root`)}
-              onToggleBookmark={() => toggleBookmark(activeFile.id, "root")}
+              isBookmarked={!!findSaved(saved, { fileId: activeFile.id, kind: "file" })}
+              onToggleBookmark={() =>
+                toggleSaved(activeFile.id, { kind: "file", title: activeFile.name })
+              }
               prevFile={prevFile}
               nextFile={nextFile}
               onNavFile={(fId) => handleSelect(fId, undefined)}
@@ -1579,6 +1859,7 @@ export function DocsApp() {
       })()}
 
       {dragOverlay}
+      {shareDialog}
     </div>
   );
 }
