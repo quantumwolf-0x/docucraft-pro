@@ -30,8 +30,8 @@
     "semantic_hash": ""
   },
   "src/components/docs/DocsApp.tsx": {
-    "mtime": 1785154450.4558442,
-    "ast_hash": "ddada6037355fdd66a2db0ec9571661d",
+    "mtime": 1785166043.3711839,
+    "ast_hash": "f4487c1dafd9a1624075ea411957be22",
     "semantic_hash": ""
   },
   "src/components/docs/DocumentViewer.tsx": {
@@ -55,8 +55,8 @@
     "semantic_hash": ""
   },
   "src/components/docs/MarkdownViewer.tsx": {
-    "mtime": 1785155009.2601767,
-    "ast_hash": "76d24d78f7d84e4bae93ffa887f74c0d",
+    "mtime": 1785166043.3718016,
+    "ast_hash": "210d82862d65ad03ebbabe4c8ab92ff8",
     "semantic_hash": ""
   },
   "src/components/docs/Mermaid.tsx": {
@@ -70,8 +70,8 @@
     "semantic_hash": ""
   },
   "src/components/docs/Sidebar.tsx": {
-    "mtime": 1785155013.617441,
-    "ast_hash": "f055454cec34c6354c5ba68591bb3d7f",
+    "mtime": 1785166043.372112,
+    "ast_hash": "5a574c797579899cbb7a47713f571afc",
     "semantic_hash": ""
   },
   "src/components/docs/WorkspaceMenu.tsx": {
@@ -415,8 +415,8 @@
     "semantic_hash": ""
   },
   "src/lib/markdown-utils.ts": {
-    "mtime": 1785016779.0052392,
-    "ast_hash": "e9fd181f9004146939f125f550f2b814",
+    "mtime": 1785166043.3723876,
+    "ast_hash": "bcebe97f5a6d2844d8ad7e2cab65037a",
     "semantic_hash": ""
   },
   "src/lib/media-embeds.tsx": {
@@ -425,13 +425,13 @@
     "semantic_hash": ""
   },
   "src/lib/persistence.ts": {
-    "mtime": 1785154125.0110579,
-    "ast_hash": "515b04db80e110fa2491d8cacd857371",
+    "mtime": 1785166043.3726907,
+    "ast_hash": "43a2fdbf3160baf0bfd14f4c27d469cc",
     "semantic_hash": ""
   },
   "src/lib/share.ts": {
-    "mtime": 1785016779.0312483,
-    "ast_hash": "894ec74b2ae109665c74acf1b3774a3e",
+    "mtime": 1785157305.8071272,
+    "ast_hash": "0241a914a68530cf01e02277c28826ee",
     "semantic_hash": ""
   },
   "src/lib/text-offsets.ts": {
@@ -617,6 +617,11 @@
   "src/lib/saved-items.ts": {
     "mtime": 1785155000.2009702,
     "ast_hash": "7447e25779d6f58035ed999bb7c07537",
+    "semantic_hash": ""
+  },
+  "src/components/docs/SharedFilesDialog.tsx": {
+    "mtime": 1785157416.9061353,
+    "ast_hash": "9c5c99c8c789a9e18e5abfede98ca7e1",
     "semantic_hash": ""
   }
 }

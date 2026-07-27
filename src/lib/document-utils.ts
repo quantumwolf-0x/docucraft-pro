@@ -1,5 +1,4 @@
 import type { DocumentKind, MdFile } from "./markdown-utils";
-import { parseHeadings, splitIntoSubtopics } from "./markdown-utils";
 
 const kindByExtension: Record<string, DocumentKind> = {
   md: "markdown",
@@ -89,8 +88,8 @@ export async function importDocumentFile(file: File): Promise<MdFile> {
     size: file.size,
     addedAt: Date.now(),
     kind,
-    headings: kind === "markdown" || kind === "text" ? parseHeadings(content, id) : [],
-    subtopics: kind === "markdown" || kind === "text" ? splitIntoSubtopics(content, file.name) : [],
+    // Structure is derived on demand by `fileSubtopics`. Parsing it during an
+    // upload delayed every file in the batch behind a scan of its own text.
   };
 }
 

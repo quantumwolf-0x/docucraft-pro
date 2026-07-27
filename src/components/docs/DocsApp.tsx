@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, Navigate } from "@tanstack/react-router";
-import gsap from "gsap";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   BookOpen,
   Menu,
@@ -18,18 +17,37 @@ import {
 
 import { Sidebar, DEFAULT_VIEW, type SidebarView } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
-import { DocumentViewer } from "./DocumentViewer";
-import { CommandPalette } from "./CommandPalette";
-import { SettingsPage } from "./SettingsPage";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { WorkspaceSheet } from "./WorkspaceSheet";
-import { HighlightsOnlyModal } from "./HighlightsOnlyModal";
-import { AskAiPanel, type AskAiPrefill } from "./ai/AskAiPanel";
+import type { AskAiPrefill } from "./ai/AskAiPanel";
+
+// Code-split surfaces. None of these is on the path to reading a document — the
+// settings page, the search palette, the AI panel and the binary-document
+// viewers are all reached by an explicit action — so none of them belongs in
+// the download that stands between the reader and their first paint. Each is
+// mounted only once it is actually asked for, so the fetch overlaps the
+// interaction that triggered it.
+const DocumentViewer = lazy(() =>
+  import("./DocumentViewer").then((m) => ({ default: m.DocumentViewer })),
+);
+const CommandPalette = lazy(() =>
+  import("./CommandPalette").then((m) => ({ default: m.CommandPalette })),
+);
+const SettingsPage = lazy(() => import("./SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const HighlightsOnlyModal = lazy(() =>
+  import("./HighlightsOnlyModal").then((m) => ({ default: m.HighlightsOnlyModal })),
+);
+const AskAiPanel = lazy(() => import("./ai/AskAiPanel").then((m) => ({ default: m.AskAiPanel })));
+const SharedFilesDialog = lazy(() =>
+  import("./SharedFilesDialog").then((m) => ({ default: m.SharedFilesDialog })),
+);
 import type { MdFile, MdChunk } from "@/lib/markdown-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
-import { parseHeadings, readingMinutes, splitIntoSubtopics } from "@/lib/markdown-utils";
+import { fileSubtopics, readingMinutes } from "@/lib/markdown-utils";
 import { getDocumentKind, importDocumentFile, SUPPORTED_ACCEPT } from "@/lib/document-utils";
 import { clearArtifactResolutionCache } from "@/lib/workspace-artifacts";
+import { loadReadingFont, warmAppFonts } from "@/lib/fonts";
+import { warmMarkdownPlugins } from "@/lib/markdown-plugins";
 import { toast } from "sonner";
 import { useHistory } from "@/hooks/use-history";
 import { isEditableTarget, hasModKey } from "@/lib/keyboard";
@@ -41,7 +59,10 @@ import {
   serializeWorkspace,
   parseWorkspaceImport,
   isDarkTheme,
+  saveScrollTop,
+  loadScrollTop,
   type PersistedFile,
+  type FolderRecord,
   type WorkspaceRecord,
   type SaveStatus,
   type ThemePref,
@@ -68,7 +89,6 @@ import {
   SHARE_FILES_HASH,
   type SharedFilesPayload,
 } from "@/lib/share";
-import { SharedFilesDialog } from "./SharedFilesDialog";
 import { MAX_UPLOAD_BYTES, getMaxStorageBytes, formatBytes } from "@/lib/storage-limits";
 
 type Theme = ThemePref;
@@ -79,6 +99,11 @@ const SIDEBAR_DEFAULT = 288;
 const SIDEBAR_WIDTH_KEY = "localdox:sidebarWidth";
 
 const clampWidth = (w: number) => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
+
+// Shared empties, so "this file has no highlights / nothing saved" is always the
+// same array. A fresh `[]` would be a new prop identity on every render.
+const EMPTY_HIGHLIGHTS: Highlight[] = [];
+const EMPTY_SAVED: SavedItem[] = [];
 
 function loadSidebarWidth(): number {
   if (typeof localStorage === "undefined") return SIDEBAR_DEFAULT;
@@ -93,12 +118,15 @@ interface WorkspaceLite {
 }
 
 /**
- * Stored file → in-memory file. Headings and subtopics are only parsed for the
- * text-shaped kinds; everything else is rendered from its bytes.
+ * Stored file → in-memory file.
+ *
+ * Structure is deliberately not parsed here. This runs for every document in
+ * the workspace during hydrate, before the first paint, and parsing each one
+ * meant scanning the entire workspace's text up front — most of it for
+ * documents the reader never opens. `fileSubtopics()` derives (and caches) a
+ * document's sections the first time something actually asks.
  */
 function toMdFile(f: PersistedFile): MdFile {
-  const kind = f.kind ?? getDocumentKind(f.name, f.mimeType);
-  const textual = kind === "markdown" || kind === "text";
   return {
     id: f.id,
     name: f.name,
@@ -107,9 +135,8 @@ function toMdFile(f: PersistedFile): MdFile {
     mimeType: f.mimeType,
     size: f.size,
     addedAt: f.addedAt,
-    kind,
-    headings: textual ? parseHeadings(f.content, f.id) : [],
-    subtopics: textual ? splitIntoSubtopics(f.content, f.name) : [],
+    kind: f.kind ?? getDocumentKind(f.name, f.mimeType),
+    folderId: f.folderId ?? null,
   };
 }
 
@@ -127,7 +154,14 @@ function uniqueFileName(name: string, taken: Set<string>): string {
 
 export function DocsApp() {
   const [files, setFiles] = useState<MdFile[]>([]);
+  // Sidebar folders. Flat buckets over the file list — a file's `folderId` says
+  // which one it sits in, so folders can appear and disappear without touching
+  // the documents themselves.
+  const [folders, setFolders] = useState<FolderRecord[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  // A just-created blank document: the viewer opens straight into its editor so
+  // the reader can paste markdown in without hunting for the Edit button.
+  const [autoEditFileId, setAutoEditFileId] = useState<string | null>(null);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [scrollTarget, setScrollTarget] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -198,6 +232,7 @@ export function DocsApp() {
   // state without being recreated on every render.
   const snapshotRef = useRef({
     files,
+    folders,
     activeFileId,
     expanded,
     sidebarCollapsed,
@@ -207,6 +242,7 @@ export function DocsApp() {
   });
   snapshotRef.current = {
     files,
+    folders,
     activeFileId,
     expanded,
     sidebarCollapsed,
@@ -232,32 +268,84 @@ export function DocsApp() {
   // Collapse/expand the desktop sidebar; the main column is flex-1, so animating
   // the sidebar width lets content reflow frame-by-frame rather than snapping.
   // Width is driven imperatively so a re-render can't clobber the tween.
+  //
+  // This and one fade in the markdown viewer were the app's only uses of GSAP —
+  // 153 kB in the initial download for two keyframe pairs. They run on the Web
+  // Animations API now, which the browser can hand to the compositor.
   useEffect(() => {
     const wrap = sidebarWrapRef.current;
     if (!wrap) return;
-    const target = sidebarCollapsed ? 56 : widthRef.current;
+    const inner = sidebarInnerRef.current;
+    const width = sidebarCollapsed ? 56 : widthRef.current;
+    const opacity = sidebarCollapsed ? 0 : 1;
+    const shift = sidebarCollapsed ? -16 : 0;
+
+    // First run positions without animating: the restored state shouldn't play
+    // an entrance every time the app boots.
     if (firstCollapseRun.current) {
-      gsap.set(wrap, { width: target });
-      if (sidebarInnerRef.current)
-        gsap.set(sidebarInnerRef.current, {
-          autoAlpha: sidebarCollapsed ? 0 : 1,
-          x: sidebarCollapsed ? -16 : 0,
-        });
       firstCollapseRun.current = false;
-    } else {
-      gsap.to(wrap, { width: target, duration: 0.45, ease: "power3.inOut" });
+      wrap.style.width = `${width}px`;
+      if (inner) {
+        inner.style.opacity = String(opacity);
+        inner.style.visibility = sidebarCollapsed ? "hidden" : "visible";
+        inner.style.transform = `translateX(${shift}px)`;
+      }
+      return;
     }
-    if (sidebarInnerRef.current) {
-      gsap.to(sidebarInnerRef.current, {
-        // autoAlpha (opacity + visibility) so the hidden full sidebar drops out
-        // of hit-testing — plain opacity:0 stays clickable and its Search / Add
-        // Files buttons fire through the collapsed icon rail.
-        autoAlpha: sidebarCollapsed ? 0 : 1,
-        x: sidebarCollapsed ? -16 : 0,
-        duration: sidebarCollapsed ? 0.25 : 0.4,
-        ease: "power2.out",
-      });
+
+    const animations: Animation[] = [];
+    // Width isn't compositable, but this element is a fixed-width flex sibling
+    // of the content column — the reflow it drives is the point of the effect.
+    if (wrap.animate) {
+      animations.push(
+        wrap.animate([{ width: wrap.getBoundingClientRect().width + "px" }, { width: `${width}px` }], {
+          duration: 450,
+          easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+          fill: "forwards",
+        }),
+      );
     }
+    wrap.style.width = `${width}px`;
+
+    if (inner) {
+      // Expanding: become visible up front so the fade-in is actually seen.
+      // Collapsing: stay visible until the fade finishes, then drop out of
+      // hit-testing — a transparent-but-visible sidebar would swallow clicks
+      // meant for the collapsed icon rail underneath it.
+      if (!sidebarCollapsed) inner.style.visibility = "visible";
+
+      const fade = inner.animate?.(
+        [
+          { opacity: inner.style.opacity || "1", transform: inner.style.transform || "none" },
+          { opacity: String(opacity), transform: `translateX(${shift}px)` },
+        ],
+        {
+          duration: sidebarCollapsed ? 250 : 400,
+          easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+          fill: "forwards",
+        },
+      );
+      inner.style.opacity = String(opacity);
+      inner.style.transform = `translateX(${shift}px)`;
+
+      if (sidebarCollapsed) {
+        if (fade) {
+          animations.push(fade);
+          void fade.finished.then(() => {
+            // Guard against a re-expand landing while the fade was running.
+            if (inner.style.opacity === "0") inner.style.visibility = "hidden";
+          }).catch(() => {
+            /* cancelled by a state change — the next run sets visibility */
+          });
+        } else {
+          inner.style.visibility = "hidden";
+        }
+      } else if (fade) {
+        animations.push(fade);
+      }
+    }
+
+    return () => animations.forEach((a) => a.cancel());
   }, [sidebarCollapsed]);
 
   const startResize = useCallback((e: React.MouseEvent) => {
@@ -298,11 +386,24 @@ export function DocsApp() {
   }, [theme]);
 
   // Reading typeface is keyed by `data-font`; "system" uses the base vars.
+  // The webfont itself is fetched here rather than bundled into the app's
+  // stylesheet — the attribute applies immediately against the system fallback
+  // and the real face swaps in when it lands.
   useEffect(() => {
     const root = document.documentElement;
     if (readingFont === "system") root.removeAttribute("data-font");
     else root.setAttribute("data-font", readingFont);
+    loadReadingFont(readingFont);
   }, [readingFont]);
+
+  // Inter backs the app chrome, and syntax highlighting / math typesetting back
+  // most documents. All three are requested off the critical path: the first
+  // paint runs on system fonts and unhighlighted code, and each upgrade lands
+  // without the reader having waited on it.
+  useEffect(() => {
+    warmAppFonts();
+    warmMarkdownPlugins();
+  }, []);
 
   useEffect(() => {
     savePrefs({ theme });
@@ -334,7 +435,9 @@ export function DocsApp() {
         size: f.size,
         addedAt: f.addedAt,
         kind: f.kind,
+        folderId: f.folderId ?? null,
       })),
+      folders: s.folders,
       // `bookmarks` is the legacy projection of `saved`, still written so an
       // older build reading this workspace keeps its file/section stars.
       bookmarks: toLegacyBookmarks(s.saved),
@@ -351,11 +454,26 @@ export function DocsApp() {
     };
   }, []);
 
+  // Writing a workspace means structured-cloning every document in it, so a
+  // redundant write is one of the most expensive things this app can do.
+  // `mutationRef` counts user mutations and `savedMutationRef` records the count
+  // at the last successful write; a save with nothing new to say is skipped.
+  const mutationRef = useRef(0);
+  const savedMutationRef = useRef(0);
+
   const persistNow = useCallback(
     async (silent: boolean) => {
       if (!workspaceIdRef.current) return;
+      if (mutationRef.current === savedMutationRef.current) {
+        // Nothing changed since the last write. Still settle the indicator, so
+        // a "Saving…" left over from a coalesced burst doesn't stick.
+        if (!silent) setSaveStatus("saved");
+        return;
+      }
+      const pending = mutationRef.current;
       try {
         await persistence.putWorkspace(buildRecord());
+        savedMutationRef.current = pending;
         if (!silent) setSaveStatus("saved");
       } catch {
         if (!silent) setSaveStatus("idle");
@@ -367,13 +485,22 @@ export function DocsApp() {
   // Called by every user mutation. Shows "Saving…", then writes after a pause.
   const markDirty = useCallback(() => {
     if (!hydratedRef.current || !workspaceIdRef.current) return;
+    mutationRef.current++;
     setSaveStatus("saving");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => void persistNow(false), 700);
   }, [persistNow]);
 
   const hydrateWorkspace = useCallback((ws: WorkspaceRecord) => {
-    const parsed: MdFile[] = ws.files.map(toMdFile);
+    const wsFolders = ws.folders ?? [];
+    const folderIds = new Set(wsFolders.map((f) => f.id));
+    // A file can outlive its folder (an older export, a share link that carried
+    // files but no folders). Those fall back to the top level instead of
+    // vanishing into a folder that is never rendered.
+    const parsed: MdFile[] = ws.files.map((f) => {
+      const file = toMdFile(f);
+      return file.folderId && folderIds.has(file.folderId) ? file : { ...file, folderId: null };
+    });
 
     if (ws.ui?.fileOrder && ws.ui.fileOrder.length > 0) {
       const order = ws.ui.fileOrder;
@@ -388,6 +515,8 @@ export function DocsApp() {
     }
 
     setFiles(parsed);
+    setFolders(wsFolders);
+    setAutoEditFileId(null);
     setActiveFileId(ws.ui?.activeFileId ?? parsed[0]?.id ?? null);
     setRecentFileIds(ws.ui?.recentFileIds ?? []);
     setExpanded(ws.ui?.expanded ?? {});
@@ -398,8 +527,14 @@ export function DocsApp() {
     workspaceIdRef.current = ws.id;
     workspaceNameRef.current = ws.name;
     createdAtRef.current = ws.createdAt ?? Date.now();
-    const st = ws.ui?.scrollTop ?? 0;
+    // The live position is tracked in localStorage (see `saveScrollTop`); the
+    // record's own value is the fallback for an imported or shared workspace
+    // that has never been scrolled on this device.
+    const st = loadScrollTop(ws.id) ?? ws.ui?.scrollTop ?? 0;
     scrollRef.current = st;
+    // A freshly hydrated workspace is exactly what is on disk.
+    mutationRef.current = 0;
+    savedMutationRef.current = 0;
     // Restore the exact scroll after the document has painted. Runs after the
     // viewer's own mount effects, so it wins.
     setTimeout(() => window.scrollTo({ top: st }), 350);
@@ -477,18 +612,32 @@ export function DocsApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist scroll position (silently) and flush on tab hide / unload.
+  // Persist scroll position and flush pending edits on tab hide / unload.
+  //
+  // The scroll handler used to schedule a full workspace write. It now records
+  // the position in localStorage instead — one small string, no clone of the
+  // document set — and the IndexedDB write is left to real mutations.
   useEffect(() => {
+    let frame = 0;
     const onScroll = () => {
-      scrollRef.current = window.scrollY;
-      if (!hydratedRef.current) return;
-      if (scrollTimer.current) clearTimeout(scrollTimer.current);
-      scrollTimer.current = setTimeout(() => {
-        void persistNow(true);
-      }, 1200);
+      // Reading scrollY is cheap, but doing it inside the scroll event competes
+      // with the browser's own scrolling work; sample it on the next frame.
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        scrollRef.current = window.scrollY;
+        if (!hydratedRef.current) return;
+        if (scrollTimer.current) clearTimeout(scrollTimer.current);
+        scrollTimer.current = setTimeout(() => {
+          const id = workspaceIdRef.current;
+          if (id) saveScrollTop(id, scrollRef.current);
+        }, 400);
+      });
     };
     const flush = () => {
       if (!hydratedRef.current) return;
+      const id = workspaceIdRef.current;
+      if (id) saveScrollTop(id, scrollRef.current);
       void persistNow(true);
     };
     const onVisibility = () => {
@@ -498,6 +647,7 @@ export function DocsApp() {
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("beforeunload", flush);
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("scroll", onScroll);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("beforeunload", flush);
@@ -634,45 +784,76 @@ export function DocsApp() {
     };
   }, [handleFileInput]);
 
-  const activeFile = files.find((f) => f.id === activeFileId) ?? null;
+  const activeFile = useMemo(
+    () => files.find((f) => f.id === activeFileId) ?? null,
+    [files, activeFileId],
+  );
   activeFileNameRef.current = activeFile?.name ?? null;
   readingModeRef.current = readingMode;
-  const workspaceRevision = files
-    .map((file) => `${file.id}:${file.name}:${file.content.length}:${file.data?.length ?? 0}`)
-    .join("|");
-  const activeIdx = activeFile ? files.findIndex((f) => f.id === activeFile.id) : -1;
-  const prevFile = activeIdx > 0 ? files[activeIdx - 1] : null;
-  const nextFile = activeIdx >= 0 && activeIdx < files.length - 1 ? files[activeIdx + 1] : null;
 
-  const handleSelect = (fileId: string, headingId?: string, query?: string) => {
-    setActiveFileId(fileId);
-    if (query !== undefined) setHighlightQuery(query || null);
+  // Identity of the workspace's file set, used to invalidate the artifact
+  // resolution cache and to key embed rendering. Built by walking every file, so
+  // it is memoized rather than recomputed on every render of the app shell.
+  const workspaceRevision = useMemo(
+    () =>
+      files
+        .map((file) => `${file.id}:${file.name}:${file.content.length}:${file.data?.length ?? 0}`)
+        .join("|"),
+    [files],
+  );
 
-    let targetHeadingId = headingId;
-    if (!targetHeadingId) {
-      const file = files.find((f) => f.id === fileId);
-      const subs = file?.subtopics || (file ? splitIntoSubtopics(file.content, file.name) : []);
-      targetHeadingId = subs?.[0]?.id || "preamble";
-    }
-    setActiveHeadingId(targetHeadingId);
+  const { prevFile, nextFile } = useMemo(() => {
+    const idx = activeFile ? files.findIndex((f) => f.id === activeFile.id) : -1;
+    return {
+      prevFile: idx > 0 ? files[idx - 1] : null,
+      nextFile: idx >= 0 && idx < files.length - 1 ? files[idx + 1] : null,
+    };
+  }, [files, activeFile]);
 
-    if (location.pathname !== "/") {
-      navigate({ to: "/" });
-    }
+  // `files` is read through a ref by the callbacks below so that selecting,
+  // deleting or downloading a document doesn't have to be a new function on
+  // every render — those go straight into <Sidebar>, which is memoized and
+  // would otherwise re-render its entire list whenever anything here changed.
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const activeFileIdRef = useRef(activeFileId);
+  activeFileIdRef.current = activeFileId;
+  const pathnameRef = useRef(location.pathname);
+  pathnameRef.current = location.pathname;
 
-    setDrawerOpen(false);
-    markDirty();
-  };
+  const handleSelect = useCallback(
+    (fileId: string, headingId?: string, query?: string) => {
+      setActiveFileId(fileId);
+      if (query !== undefined) setHighlightQuery(query || null);
 
-  const removeFile = (id: string) => {
+      let targetHeadingId = headingId;
+      if (!targetHeadingId) {
+        const file = filesRef.current.find((f) => f.id === fileId);
+        const subs = file ? fileSubtopics(file) : [];
+        targetHeadingId = subs?.[0]?.id || "preamble";
+      }
+      setActiveHeadingId(targetHeadingId);
+
+      if (pathnameRef.current !== "/") {
+        navigate({ to: "/" });
+      }
+
+      setDrawerOpen(false);
+      markDirty();
+    },
+    [navigate, markDirty],
+  );
+
+  const removeFile = useCallback((id: string) => {
+    const files = filesRef.current;
     const index = files.findIndex((f) => f.id === id);
     const fileToRestore = files[index];
-    const activeWas = activeFileId;
+    const activeWas = activeFileIdRef.current;
 
     if (!fileToRestore) return;
 
     setFiles((prev) => prev.filter((f) => f.id !== id));
-    if (activeFileId === id) {
+    if (activeWas === id) {
       setActiveFileId(files.find((f) => f.id !== id)?.id ?? null);
     }
     markDirty();
@@ -697,7 +878,7 @@ export function DocsApp() {
         },
       },
     });
-  };
+  }, [markDirty]);
 
   const toggleArchiveFile = useCallback(
     (id: string) => {
@@ -707,9 +888,8 @@ export function DocsApp() {
     [markDirty],
   );
 
-  const downloadFile = useCallback(
-    (id: string) => {
-      const file = files.find((f) => f.id === id);
+  const downloadFile = useCallback((id: string) => {
+      const file = filesRef.current.find((f) => f.id === id);
       if (!file) return;
       let url = "";
       if (file.data) {
@@ -723,13 +903,100 @@ export function DocsApp() {
       a.download = file.name;
       a.click();
       if (!file.data) URL.revokeObjectURL(url);
-    },
-    [files],
-  );
+  }, []);
 
   const renameFile = useCallback(
     (id: string, newName: string) => {
       setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName } : f)));
+      markDirty();
+    },
+    [markDirty],
+  );
+
+  /**
+   * Blank markdown document, created from the sidebar's New menu. It opens
+   * immediately in the viewer's editor so the reader can paste markdown into
+   * it; from there the normal autosave path takes over.
+   */
+  const createFile = useCallback(
+    (folderId?: string | null) => {
+      const taken = new Set(snapshotRef.current.files.map((f) => f.name));
+      const name = uniqueFileName("new.md", taken);
+      const id = `${name}-${crypto.randomUUID().slice(0, 8)}`;
+      const doc: MdFile = {
+        id,
+        name,
+        content: "",
+        mimeType: "text/markdown",
+        size: 0,
+        addedAt: Date.now(),
+        kind: "markdown",
+        folderId: folderId ?? null,
+        headings: [],
+      };
+      // Creating the very first document also creates the workspace it lives
+      // in, the same way the first upload does — otherwise nothing persists.
+      if (!workspaceIdRef.current) {
+        const workspace = crypto.randomUUID();
+        workspaceIdRef.current = workspace;
+        workspaceNameRef.current = "My workspace";
+        createdAtRef.current = Date.now();
+        setWorkspaceId(workspace);
+        setWorkspaces([{ id: workspace, name: workspaceNameRef.current, docCount: 1 }]);
+        savePrefs({ lastWorkspaceId: workspace });
+      }
+
+      setFiles((prev) => [...prev, doc]);
+      setActiveFileId(id);
+      setActiveHeadingId(null);
+      setAutoEditFileId(id);
+      setDrawerOpen(false);
+      if (location.pathname !== "/") navigate({ to: "/" });
+      markDirty();
+      toast.success(`Created ${name}`, { description: "Paste your markdown, then Save." });
+    },
+    [location.pathname, navigate, markDirty],
+  );
+
+  const createFolder = useCallback(
+    (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const folder: FolderRecord = {
+        id: crypto.randomUUID(),
+        name: trimmed,
+        createdAt: Date.now(),
+      };
+      setFolders((prev) => [...prev, folder]);
+      markDirty();
+      toast.success(`Created folder "${trimmed}"`);
+    },
+    [markDirty],
+  );
+
+  const renameFolder = useCallback(
+    (id: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: trimmed } : f)));
+      markDirty();
+    },
+    [markDirty],
+  );
+
+  /** Deleting a folder keeps its documents — they move back to the top level. */
+  const deleteFolder = useCallback(
+    (id: string) => {
+      setFolders((prev) => prev.filter((f) => f.id !== id));
+      setFiles((prev) => prev.map((f) => (f.folderId === id ? { ...f, folderId: null } : f)));
+      markDirty();
+    },
+    [markDirty],
+  );
+
+  const moveFileToFolder = useCallback(
+    (fileId: string, folderId: string | null) => {
+      setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, folderId } : f)));
       markDirty();
     },
     [markDirty],
@@ -892,10 +1159,10 @@ export function DocsApp() {
 
   const openFromHome = useCallback(
     async (fileId: string, subtopicId?: string) => {
-      const file = files.find((item) => item.id === fileId);
+      const file = filesRef.current.find((item) => item.id === fileId);
       if (!file) return;
 
-      const chunks = file.subtopics || splitIntoSubtopics(file.content, file.name);
+      const chunks = fileSubtopics(file);
       const targetSubtopicId = subtopicId ?? chunks[0]?.id ?? "preamble";
 
       // Collapse sidebar to show only the document
@@ -923,20 +1190,19 @@ export function DocsApp() {
 
       navigate({ to: "/" });
     },
-    [buildRecord, files, navigate],
+    [buildRecord, navigate],
   );
 
   const handleContentChange = useCallback(
     (fileId: string, content: string) => {
+      // Structure is dropped rather than recomputed. This fires on every pause
+      // in typing, and re-parsing the whole document here put an O(document)
+      // scan on the autosave path; whatever next reads the sections derives
+      // them from the new content and caches the result.
       setFiles((prev) =>
         prev.map((f) =>
           f.id === fileId
-            ? {
-                ...f,
-                content,
-                headings: parseHeadings(content, fileId),
-                subtopics: splitIntoSubtopics(content, f.name),
-              }
+            ? { ...f, content, headings: undefined, subtopics: undefined }
             : f,
         ),
       );
@@ -1137,6 +1403,9 @@ export function DocsApp() {
           ...f,
           id: crypto.randomUUID(),
           addedAt: f.addedAt ?? Date.now(),
+          // Folders don't travel with a share link; shared files land at the
+          // top level rather than pointing at a folder that isn't here.
+          folderId: null,
         }));
 
         const incomingBytes = stamped.reduce((sum, f) => sum + (f.size ?? f.content.length), 0);
@@ -1301,7 +1570,7 @@ export function DocsApp() {
     if (!activeHeadingId) {
       return { kind: "file", title: activeFile.name };
     }
-    const chunks = activeFile.subtopics || splitIntoSubtopics(activeFile.content, activeFile.name);
+    const chunks = fileSubtopics(activeFile);
     const chunk = chunks.find((c) => c.id === activeHeadingId);
     return {
       kind: "section",
@@ -1323,6 +1592,83 @@ export function DocsApp() {
     const draft = activePageDraft();
     if (activeFile && draft) toggleSaved(activeFile.id, draft);
   }, [activeFile, activePageDraft, toggleSaved]);
+
+  // ---- props for the viewer, held to stable identities ----
+  //
+  // Each of these used to be built inline in the JSX below. A `.filter()` or a
+  // `.map()` in a prop returns a new array every render, so <MarkdownViewer>
+  // saw changed props on every render of this component no matter what actually
+  // changed — which made memoizing it pointless and re-ran its highlight
+  // painting and plugin work each time.
+
+  const activeFileHighlights = useMemo(
+    () => (activeFile ? highlights.filter((h) => h.fileId === activeFile.id) : EMPTY_HIGHLIGHTS),
+    [highlights, activeFile],
+  );
+
+  const activeFileSaved = useMemo(
+    () => (activeFile ? saved.filter((s) => s.fileId === activeFile.id) : EMPTY_SAVED),
+    [saved, activeFile],
+  );
+
+  const addHighlightToActive = useCallback(
+    (hl: Omit<Highlight, "id" | "fileId">) => {
+      if (activeFile) addHighlight(hl, activeFile.id);
+    },
+    [addHighlight, activeFile],
+  );
+
+  const toggleSavedOnActive = useCallback(
+    (draft: SavedDraft) => {
+      if (activeFile) toggleSaved(activeFile.id, draft);
+    },
+    [toggleSaved, activeFile],
+  );
+
+  const shareActiveFile = useCallback(() => {
+    if (activeFile) shareFile(activeFile.id);
+  }, [shareFile, activeFile]);
+
+  const navFromViewer = useCallback(
+    (fileId: string, subtopicId: string | null) => handleSelect(fileId, subtopicId || undefined),
+    [handleSelect],
+  );
+
+  const navToFile = useCallback((fileId: string) => handleSelect(fileId, undefined), [handleSelect]);
+
+  const toggleActiveDocumentSaved = useCallback(() => {
+    if (activeFile) toggleSaved(activeFile.id, { kind: "file", title: activeFile.name });
+  }, [toggleSaved, activeFile]);
+
+  const consumeStartInEdit = useCallback(() => setAutoEditFileId(null), []);
+  const clearPendingSaved = useCallback(() => setPendingSaved(null), []);
+
+  const nextReadingMinutes = useMemo(
+    () => (nextFile ? readingMinutes(nextFile.content) : null),
+    [nextFile],
+  );
+
+  // The AI panel only needs each document's text. Mapping in the JSX rebuilt
+  // this array — and every object in it — on every render of the app.
+  const aiFiles = useMemo(
+    () => files.map((f) => ({ id: f.id, name: f.name, content: f.content })),
+    [files],
+  );
+
+  const aiActiveFile = useMemo(
+    () =>
+      activeFile
+        ? { id: activeFile.id, name: activeFile.name, content: activeFile.content }
+        : null,
+    [activeFile],
+  );
+
+  const aiActiveSection = useMemo(() => {
+    if (!activeFile) return null;
+    const subs = fileSubtopics(activeFile);
+    const section = subs.find((s) => s.id === activeHeadingId);
+    return section ? { title: section.title, content: section.content } : null;
+  }, [activeFile, activeHeadingId]);
 
   // Opening a star: go to its file and page first, then hand the item to the
   // viewer, which scrolls to the passage and flashes it once it has rendered.
@@ -1352,6 +1698,30 @@ export function DocsApp() {
     setAiPrefill(prefill);
     setAiOpen(true);
   }, []);
+  const closeAskAi = useCallback(() => setAiOpen(false), []);
+
+  // Cmd/Ctrl+K. Owned here rather than inside <CommandPalette>, which is code
+  // split and unmounted until the palette opens — a shortcut registered by that
+  // component could not open it the first time.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (hasModKey(e) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Fetch the palette's chunk as soon as the app is idle. It is the most likely
+  // of the split surfaces to be opened, and opening it is a keystroke away, so
+  // it should already be in cache by the time that keystroke arrives.
+  useEffect(() => {
+    const warm = () => void import("./CommandPalette");
+    if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 4000 });
+    else setTimeout(warm, 1500);
+  }, []);
 
   // Append AI output to the open document, or spin it out into a new one.
   const insertAiOutput = useCallback(
@@ -1375,8 +1745,6 @@ export function DocsApp() {
         size: content.length,
         addedAt: Date.now(),
         kind: "markdown",
-        headings: parseHeadings(content, id),
-        subtopics: splitIntoSubtopics(content, name),
       };
       setFiles((prev) => [...prev, doc]);
       setActiveFileId(id);
@@ -1419,15 +1787,32 @@ export function DocsApp() {
   // Rendered from both the empty state and the reader — a shared link can land
   // on either.
   const shareDialog = incomingShare ? (
-    <SharedFilesDialog
-      open
-      files={incomingShare.files}
-      sourceName={incomingShare.sourceName}
-      currentWorkspaceName={workspaceId ? workspaceNameRef.current : null}
-      busy={importingShare}
-      onDismiss={() => setIncomingShare(null)}
-      onImport={(target, ids, name) => void acceptSharedFiles(target, ids, name)}
-    />
+    <Suspense fallback={null}>
+      <SharedFilesDialog
+        open
+        files={incomingShare.files}
+        sourceName={incomingShare.sourceName}
+        currentWorkspaceName={workspaceId ? workspaceNameRef.current : null}
+        busy={importingShare}
+        onDismiss={() => setIncomingShare(null)}
+        onImport={(target: "new" | "current", ids: string[], name: string) =>
+          void acceptSharedFiles(target, ids, name)
+        }
+      />
+    </Suspense>
+  ) : null;
+
+  // Search palette. Split out of the main bundle, so it is only in the tree
+  // while it is open; its chunk is warmed on idle above.
+  const commandPalette = paletteOpen ? (
+    <Suspense fallback={null}>
+      <CommandPalette
+        files={files}
+        open
+        onOpenChange={setPaletteOpen}
+        onSelect={showSettings ? openFromHome : handleSelect}
+      />
+    </Suspense>
   ) : null;
 
   if (booting) {
@@ -1455,13 +1840,9 @@ export function DocsApp() {
           onExportWorkspace={exportWorkspace}
           onShareWorkspace={shareWorkspace}
           onDeleteWorkspace={deleteWorkspace}
+          onOpenSettings={openSettings}
         />
-        <CommandPalette
-          files={files}
-          open={paletteOpen}
-          onOpenChange={setPaletteOpen}
-          onSelect={openFromHome}
-        />
+        {commandPalette}
         <div className="flex min-h-[calc(100dvh-4rem)] flex-col items-center justify-center gap-6 px-6 text-center">
           <Upload className="h-14 w-14 text-muted-foreground" />
           <div>
@@ -1470,13 +1851,24 @@ export function DocsApp() {
               We support Markdown, PDFs, Spreadsheets, Presentations, Images, and more!
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            Upload files
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Upload files
+            </button>
+            {/* Nothing to right-click yet, so the sidebar's New menu is out of
+                reach — a blank document has to be startable from here too. */}
+            <button
+              type="button"
+              onClick={() => createFile(null)}
+              className="rounded-xl border border-border bg-card px-5 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent"
+            >
+              New markdown file
+            </button>
+          </div>
         </div>
         <input
           ref={inputRef}
@@ -1519,12 +1911,7 @@ export function DocsApp() {
         onDeleteWorkspace={deleteWorkspace}
       />
 
-      <CommandPalette
-        files={files}
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
-        onSelect={handleSelect}
-      />
+      {commandPalette}
 
       <div className="flex">
         <div
@@ -1536,7 +1923,6 @@ export function DocsApp() {
               files={files}
               activeFileId={activeFileId}
               activeHeadingId={activeHeadingId}
-              recentFileIds={recentFileIds}
               expanded={expanded}
               onToggleFile={toggleFile}
               onSelect={handleSelect}
@@ -1547,6 +1933,12 @@ export function DocsApp() {
               onShareFile={shareFile}
               onShareFiles={(ids) => void shareFiles(ids)}
               onRenameFile={renameFile}
+              folders={folders}
+              onCreateFile={createFile}
+              onCreateFolder={createFolder}
+              onRenameFolder={renameFolder}
+              onDeleteFolder={deleteFolder}
+              onMoveFileToFolder={moveFileToFolder}
               onReorderFile={reorderFile}
               onSortByName={sortFilesByName}
               view={sidebarView}
@@ -1669,7 +2061,6 @@ export function DocsApp() {
                   files={files}
                   activeFileId={activeFileId}
                   activeHeadingId={activeHeadingId}
-                  recentFileIds={recentFileIds}
                   expanded={expanded}
                   onToggleFile={toggleFile}
                   onSelect={handleSelect}
@@ -1680,6 +2071,12 @@ export function DocsApp() {
               onShareFile={shareFile}
               onShareFiles={(ids) => void shareFiles(ids)}
                   onRenameFile={renameFile}
+                  folders={folders}
+                  onCreateFile={createFile}
+                  onCreateFolder={createFolder}
+                  onRenameFolder={renameFolder}
+                  onDeleteFolder={deleteFolder}
+                  onMoveFileToFolder={moveFileToFolder}
                   onReorderFile={reorderFile}
                   onSortByName={sortFilesByName}
                   view={sidebarView}
@@ -1715,6 +2112,12 @@ export function DocsApp() {
           </div>
         )}
 
+        {/* One boundary for the whole content column. The settings page and the
+            binary-document viewers are code-split; the markdown viewer is not,
+            so the common case never suspends here. */}
+        <Suspense
+          fallback={<main className="min-w-0 flex-1" aria-busy />}
+        >
         <main className="min-w-0 flex-1 pb-24 lg:pb-0 md:landscape:pb-0">
           {showSettings ? (
             <SettingsPage
@@ -1753,25 +2156,27 @@ export function DocsApp() {
               file={activeFile}
               prevFile={prevFile}
               nextFile={nextFile}
-              onNav={(fId, sId) => handleSelect(fId, sId || undefined)}
+              onNav={navFromViewer}
               activeSubtopicId={activeHeadingId}
               highlightQuery={highlightQuery}
               onContentChange={handleContentChange}
-              nextReadingMin={nextReadingMin}
+              startInEditFileId={autoEditFileId}
+              onStartInEditConsumed={consumeStartInEdit}
+              nextReadingMin={nextReadingMinutes}
               isBookmarked={!!activePageSaved}
               onToggleBookmark={toggleActivePageSaved}
-              highlights={highlights.filter((h) => h.fileId === activeFile.id)}
-              onAddHighlight={(hl) => addHighlight(hl, activeFile.id)}
+              highlights={activeFileHighlights}
+              onAddHighlight={addHighlightToActive}
               onUpdateHighlight={updateHighlight}
               onRemoveHighlight={removeHighlight}
               onRepairHighlights={repairHighlights}
-              saved={saved.filter((s) => s.fileId === activeFile.id)}
-              onToggleSaved={(draft) => toggleSaved(activeFile.id, draft)}
+              saved={activeFileSaved}
+              onToggleSaved={toggleSavedOnActive}
               onRemoveSaved={removeSaved}
               pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
-              onSavedShown={() => setPendingSaved(null)}
+              onSavedShown={clearPendingSaved}
               onHome={goHome}
-              onShareFile={() => shareFile(activeFile.id)}
+              onShareFile={shareActiveFile}
               onAskAi={askAiFromSelection}
               readingMode={readingMode}
               workspaceId={workspaceId}
@@ -1784,15 +2189,14 @@ export function DocsApp() {
             <DocumentViewer
               file={activeFile}
               isBookmarked={!!findSaved(saved, { fileId: activeFile.id, kind: "file" })}
-              onToggleBookmark={() =>
-                toggleSaved(activeFile.id, { kind: "file", title: activeFile.name })
-              }
+              onToggleBookmark={toggleActiveDocumentSaved}
               prevFile={prevFile}
               nextFile={nextFile}
-              onNavFile={(fId) => handleSelect(fId, undefined)}
+              onNavFile={navToFile}
             />
           ) : null}
         </main>
+        </Suspense>
       </div>
 
       <input
@@ -1810,7 +2214,7 @@ export function DocsApp() {
         (() => {
           const hlFile = files.find((f) => f.id === highlightsOnlyFileId);
           if (!hlFile) return null;
-          const hlFileChunks = hlFile.subtopics || splitIntoSubtopics(hlFile.content, hlFile.name);
+          const hlFileChunks = fileSubtopics(hlFile);
           const chunkOrder = new Map(hlFileChunks.map((c, i) => [c.id, i]));
           const fileHighlights = highlights
             .filter((h) => h.fileId === hlFile.id)
@@ -1821,42 +2225,39 @@ export function DocsApp() {
               return (a.start ?? 0) - (b.start ?? 0);
             });
           return (
-            <HighlightsOnlyModal
-              fileName={hlFile.name}
-              highlights={fileHighlights}
-              onClose={() => setHighlightsOnlyFileId(null)}
-              onJump={(hl) => {
-                setHighlightsOnlyFileId(null);
-                handleSelect(hl.fileId, hl.subtopicId || undefined);
-              }}
-              onRemove={removeHighlight}
-            />
+            <Suspense fallback={null}>
+              <HighlightsOnlyModal
+                fileName={hlFile.name}
+                highlights={fileHighlights}
+                onClose={() => setHighlightsOnlyFileId(null)}
+                onJump={(hl: Highlight) => {
+                  setHighlightsOnlyFileId(null);
+                  handleSelect(hl.fileId, hl.subtopicId || undefined);
+                }}
+                onRemove={removeHighlight}
+              />
+            </Suspense>
           );
         })()}
 
-      {(() => {
-        const subs =
-          activeFile?.subtopics ||
-          (activeFile ? splitIntoSubtopics(activeFile.content, activeFile.name) : []);
-        const section = subs.find((s) => s.id === activeHeadingId) ?? null;
-        return (
+      {/* Mounted only once opened. The panel is a large component whose props
+          are derived from every document in the workspace; keeping it out of
+          the tree until it is asked for saves that work on every render. */}
+      {aiOpen && (
+        <Suspense fallback={null}>
           <AskAiPanel
-            open={aiOpen}
-            onClose={() => setAiOpen(false)}
+            open
+            onClose={closeAskAi}
             prefill={aiPrefill}
             initialSelection={null}
-            activeFile={
-              activeFile
-                ? { id: activeFile.id, name: activeFile.name, content: activeFile.content }
-                : null
-            }
-            activeSection={section ? { title: section.title, content: section.content } : null}
-            files={files.map((f) => ({ id: f.id, name: f.name, content: f.content }))}
+            activeFile={aiActiveFile}
+            activeSection={aiActiveSection}
+            files={aiFiles}
             onInsert={insertAiOutput}
             onCreateDoc={createAiDoc}
           />
-        );
-      })()}
+        </Suspense>
+      )}
 
       {dragOverlay}
       {shareDialog}
@@ -1886,6 +2287,7 @@ function Header({
   onExportWorkspace,
   onShareWorkspace,
   onDeleteWorkspace,
+  onOpenSettings,
 }: {
   theme: Theme;
   onCycleTheme: () => void;
@@ -1908,10 +2310,11 @@ function Header({
   onExportWorkspace?: () => void;
   onShareWorkspace?: () => void;
   onDeleteWorkspace?: (id: string) => void;
+  onOpenSettings?: () => void;
 }) {
   return (
     <header
-      className={`z-(--z-nav) flex h-16 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6 relative ${
+      className={`app-surface z-(--z-nav) flex h-16 items-center justify-between border-b border-border px-4 md:px-6 relative ${
         hideOnDesktop ? "lg:hidden md:landscape:hidden" : ""
       }`}
     >
@@ -2006,6 +2409,16 @@ function Header({
               />
             </div>
           </>
+        )}
+        {onOpenSettings && (
+          <button
+            onClick={onOpenSettings}
+            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="Settings"
+            title="Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
         )}
       </div>
     </header>

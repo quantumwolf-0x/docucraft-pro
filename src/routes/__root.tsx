@@ -10,6 +10,7 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
+import { applyDeviceTier } from "@/lib/device-tier";
 
 // Mermaid loads each diagram type (flowchart, ERD, etc.) in a separate Vite
 // chunk. After a deployment, an already-open tab can still reference a chunk
@@ -149,6 +150,10 @@ import { Toaster } from "@/components/ui/sonner";
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+
+  // Tag <html> with what this device can afford to composite, before anything
+  // translucent is on screen. See `src/lib/device-tier.ts`.
+  useEffect(applyDeviceTier, []);
 
   return (
     <QueryClientProvider client={queryClient}>

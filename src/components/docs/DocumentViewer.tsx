@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
-import JSZip from "jszip";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+// `xlsx` (~563 kB) and `jszip` (~273 kB) are imported where they are used, not
+// here: a static import put both in the app's main chunk, so every reader
+// downloaded a spreadsheet parser and a zip reader before they could open a
+// markdown file. Word documents already followed this pattern with `mammoth`.
 import {
   ChevronLeft,
   ChevronRight,
@@ -60,7 +62,7 @@ function useFileNav({
   };
 }
 
-export function DocumentViewer(props: Props) {
+function DocumentViewerImpl(props: Props) {
   const { file } = props;
   const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
   if (kind === "pdf") return <PdfViewer {...props} />;
@@ -73,6 +75,12 @@ export function DocumentViewer(props: Props) {
     return <GoogleViewer {...props} isSlides={kind === "google-slide"} />;
   return <UnknownViewer {...props} />;
 }
+
+/**
+ * Memoized for the same reason as the markdown viewer: parsing a spreadsheet or
+ * a deck is expensive, and an app-shell re-render must not trigger it again.
+ */
+export const DocumentViewer = memo(DocumentViewerImpl);
 
 function ViewerFrame({
   file,
@@ -226,24 +234,33 @@ function SpreadsheetViewer({
   const [sort, setSort] = useState<{ column: number; direction: 1 | -1 } | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    try {
-      const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
-      const workbook =
-        kind === "csv"
-          ? XLSX.read(file.content, { type: "string" })
-          : XLSX.read(dataUrlToArrayBuffer(file.data), { type: "array" });
-      const next = workbook.SheetNames.map((name) => ({
-        name,
-        rows: (
-          XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "" }) as unknown[][]
-        ).map((row) => row.map((value) => String(value ?? ""))),
-      }));
-      setSheets(next);
-      setActive(0);
-      setError("");
-    } catch {
-      setError("This spreadsheet could not be read.");
-    }
+    let alive = true;
+    void (async () => {
+      try {
+        const XLSX = await import("xlsx");
+        if (!alive) return;
+        const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
+        const workbook =
+          kind === "csv"
+            ? XLSX.read(file.content, { type: "string" })
+            : XLSX.read(dataUrlToArrayBuffer(file.data), { type: "array" });
+        const next = workbook.SheetNames.map((name) => ({
+          name,
+          rows: (
+            XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "" }) as unknown[][]
+          ).map((row) => row.map((value) => String(value ?? ""))),
+        }));
+        if (!alive) return;
+        setSheets(next);
+        setActive(0);
+        setError("");
+      } catch {
+        if (alive) setError("This spreadsheet could not be read.");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
   }, [file.content, file.data, file.kind, file.mimeType, file.name]);
   const sheet = sheets[active];
   const headers = sheet?.rows[0] ?? [];
@@ -453,6 +470,7 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
     }
     void (async () => {
       try {
+        const { default: JSZip } = await import("jszip");
         const zip = await JSZip.loadAsync(buffer);
         const paths = Object.keys(zip.files)
           .filter((path) => /^ppt\/slides\/slide\d+\.xml$/.test(path))

@@ -8,7 +8,7 @@
 // the document above it.
 
 import type { MdFile } from "./markdown-utils";
-import { splitIntoSubtopics, stripExt } from "./markdown-utils";
+import { fileSubtopics, stripExt } from "./markdown-utils";
 
 // Text a reader drags over is a highlight, not a star — highlights already keep
 // passages, with colors and notes. Stars are for whole structures: a document, a
@@ -146,7 +146,7 @@ export function migrateBookmarks(
       });
       continue;
     }
-    const chunks = file.subtopics || splitIntoSubtopics(file.content, file.name);
+    const chunks = fileSubtopics(file);
     const chunk = chunks.find((c) => c.id === subtopicId);
     if (!chunk) continue;
     out.push({

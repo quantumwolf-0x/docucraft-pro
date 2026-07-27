@@ -29,6 +29,29 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ["mermaid"],
+    // `mermaid` is deliberately NOT pre-bundled. It is loaded lazily (see
+    // MermaidLazy.tsx) and forcing it through optimizeDeps pulled its whole
+    // dependency tree — cytoscape, dagre, d3 — into the dev-server warm-up and
+    // encouraged it back into the initial graph.
+    exclude: ["mermaid", "@babel/standalone", "xlsx", "mammoth"],
+  },
+  build: {
+    // Terser-grade minification is worth the build time here: the app ships a
+    // large markdown pipeline, and this is the cheapest win for low-end devices
+    // on slow connections.
+    cssMinify: "lightningcss",
+    // These are all code-split now; anything still large is a real regression
+    // rather than an expected big vendor chunk.
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        // Keep the React runtime in one long-lived chunk. It changes far less
+        // often than app code, so a deploy shouldn't invalidate it.
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return;
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "react";
+        },
+      },
+    },
   },
 });

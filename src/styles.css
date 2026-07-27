@@ -2,28 +2,20 @@
 @source "../src";
 @import "tw-animate-css";
 @import "highlight.js/styles/github.css";
-@import "katex/dist/katex.min.css";
 
-/* Reading-optimized fonts, bundled for offline use (no CDN, no CSP issues).
-   Source Serif 4 = long-form body/headings, Inter = UI + tables,
-   JetBrains Mono = code. */
-@import "@fontsource/source-serif-4/400.css";
-@import "@fontsource/source-serif-4/400-italic.css";
-@import "@fontsource/source-serif-4/600.css";
-@import "@fontsource/source-serif-4/700.css";
-@import "@fontsource/inter/400.css";
-@import "@fontsource/inter/500.css";
-@import "@fontsource/inter/600.css";
-@import "@fontsource/inter/700.css";
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
-/* Alternate reading faces the user can switch to in Settings. */
-@import "@fontsource/newsreader/400.css";
-@import "@fontsource/newsreader/400-italic.css";
-@import "@fontsource/newsreader/600.css";
-@import "@fontsource/newsreader/700.css";
-@import "@fontsource/atkinson-hyperlegible/400.css";
-@import "@fontsource/atkinson-hyperlegible/700.css";
+/* Fonts and KaTeX's stylesheet are deliberately NOT imported here.
+ *
+ * Bundling them made this file render-blocking at ~212 kB and pulled 95 woff2
+ * subsets into the first load, for faces most readers never select. They are
+ * fetched on demand instead — see `src/lib/fonts.ts`:
+ *   - Inter (--font-ui) and JetBrains Mono (--font-mono) load just after first
+ *     paint, behind their system fallbacks.
+ *   - Source Serif 4 / Newsreader / Atkinson load only when the reader picks
+ *     that typeface in Settings.
+ *   - KaTeX's CSS loads only when a document actually contains math.
+ * Every `--font-*` var below already declares a system fallback stack, so the
+ * page is fully readable before any of them arrive.
+ */
 
 @custom-variant dark (&:is(.dark *));
 
@@ -303,6 +295,60 @@
 
   ::selection {
     background: var(--selection);
+  }
+}
+
+/*
+ * Translucent chrome (app header, viewer header, mobile bottom bar).
+ *
+ * These sit over scrolling content, so the browser re-samples what is behind
+ * them on every scroll frame. `backdrop-filter` is expensive enough that on a
+ * low-end GPU this alone keeps scrolling off 60fps — so the blur is treated as
+ * a progressive enhancement. `src/lib/device-tier.ts` tags <html> with
+ * `data-fx`, and the `lite` tier gets the same surface, opaque.
+ *
+ * `contain: paint` lets the compositor treat each bar as its own isolated box
+ * rather than re-considering the whole page when one of them repaints.
+ */
+.app-surface {
+  background-color: color-mix(in oklab, var(--background) 82%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  contain: paint;
+}
+
+[data-fx="lite"] .app-surface {
+  background-color: var(--background);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Every remaining decorative blur — overlays, popovers, floating controls — is
+   dropped on the lite tier too. They are all drawn over content, and several
+   animate, which is the worst case for the filter. */
+[data-fx="lite"] [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/*
+ * Expensive-to-paint blocks are skipped until they are near the viewport.
+ *
+ * Only blocks whose cost is in painting rather than in layout participate:
+ * tables, code fences, diagrams, images and interactive embeds. `auto` for the
+ * intrinsic size means the browser remembers each block's real height after it
+ * has been rendered once, so the scrollbar doesn't shift underneath the reader.
+ *
+ * Prose paragraphs are deliberately excluded — they are cheap, and skipping
+ * them would interfere with the text-offset lookups that anchor highlights.
+ */
+@supports (content-visibility: auto) {
+  .docs-prose .docs-table-wrap,
+  .docs-prose pre,
+  .docs-prose .docs-mermaid,
+  .docs-prose img {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 240px;
   }
 }
 

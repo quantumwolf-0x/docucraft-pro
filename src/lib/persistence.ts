@@ -18,6 +18,20 @@ export interface PersistedFile {
   size?: number;
   addedAt?: number;
   kind?: import("./markdown-utils").DocumentKind;
+  /** Sidebar folder this file is filed under; null/undefined = top level. */
+  folderId?: string | null;
+}
+
+/**
+ * A sidebar folder. Purely an organizational bucket over the flat file list —
+ * files keep living in `WorkspaceRecord.files` and point back with `folderId`,
+ * so a workspace whose folders are dropped (an older build, a share link)
+ * degrades to the flat list rather than losing documents.
+ */
+export interface FolderRecord {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface PersistedUI {
@@ -39,6 +53,7 @@ export interface WorkspaceRecord {
   createdAt: number;
   updatedAt: number;
   files: PersistedFile[];
+  folders?: FolderRecord[];
   /**
    * Legacy `${fileId}#${subtopicId}` stars. Still written so a downgrade keeps
    * working, but `saved` is the source of truth — see `migrateBookmarks`.
@@ -134,6 +149,42 @@ export const persistence = {
   },
 };
 
+// ---- scroll position (localStorage, per workspace) ----
+//
+// Scroll position used to ride along in the workspace record, which meant every
+// scroll-stop wrote the entire workspace back to IndexedDB — every document's
+// text plus every binary file's base64 data URL, structured-cloned in one go.
+// In a workspace holding a few PDFs that is tens of megabytes of copying on the
+// main thread, every time the reader stopped scrolling.
+//
+// It is one number. It lives in localStorage now, keyed per workspace, and the
+// workspace record is only written when the workspace itself actually changes.
+// `WorkspaceRecord.ui.scrollTop` is still populated on save so exports and
+// share links keep working.
+
+const SCROLL_KEY_PREFIX = "localdox:scroll:";
+
+export function saveScrollTop(workspaceId: string, top: number): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(SCROLL_KEY_PREFIX + workspaceId, String(Math.round(top)));
+  } catch {
+    /* storage unavailable — the position is simply not restored next time */
+  }
+}
+
+export function loadScrollTop(workspaceId: string): number | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SCROLL_KEY_PREFIX + workspaceId);
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export function emptyUI(): PersistedUI {
   return {
     activeFileId: null,
@@ -153,6 +204,7 @@ export function newWorkspaceRecord(name: string): WorkspaceRecord {
     createdAt: now,
     updatedAt: now,
     files: [],
+    folders: [],
     bookmarks: [],
     saved: [],
     highlights: [],
@@ -262,7 +314,17 @@ export function parseWorkspaceImport(json: string): WorkspaceRecord {
         size: typeof f.size === "number" ? f.size : undefined,
         addedAt: typeof f.addedAt === "number" ? f.addedAt : undefined,
         kind: typeof f.kind === "string" ? f.kind : undefined,
+        folderId: typeof f.folderId === "string" ? f.folderId : null,
       })),
+    folders: Array.isArray(w.folders)
+      ? (w.folders as Partial<FolderRecord>[])
+          .filter((f) => f && typeof f.id === "string" && typeof f.name === "string")
+          .map((f) => ({
+            id: f.id as string,
+            name: f.name as string,
+            createdAt: typeof f.createdAt === "number" ? f.createdAt : now,
+          }))
+      : [],
     bookmarks: Array.isArray(w.bookmarks)
       ? w.bookmarks.filter((b: any) => typeof b === "string")
       : [],

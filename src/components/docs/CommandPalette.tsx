@@ -127,14 +127,14 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
     onOpenChange(false);
   };
 
+  // Cmd/Ctrl+K lives in `DocsApp` — this component is code-split and only
+  // mounted once the palette is open, so a shortcut owned here would not exist
+  // until after the first time it was used. Escape stays local: it is only
+  // meaningful while the palette is on screen.
   useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        onOpenChange(!open);
-      } else if (e.key === "Escape" && open) {
-        onOpenChange(false);
-      }
+      if (e.key === "Escape") onOpenChange(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

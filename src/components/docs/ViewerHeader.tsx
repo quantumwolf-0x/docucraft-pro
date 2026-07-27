@@ -31,7 +31,7 @@ export function ViewerHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="sticky top-0 z-(--z-sticky) flex h-14 shrink-0 items-center gap-2 border-b border-border/50 bg-background/80 px-4 backdrop-blur-md md:px-7">
+    <div className="app-surface sticky top-0 z-(--z-sticky) flex h-14 shrink-0 items-center gap-2 border-b border-border/50 px-4 md:px-7">
       <div className="flex shrink-0 items-center gap-1">
         <HeaderNavButton
           onClick={nav.onPrev}

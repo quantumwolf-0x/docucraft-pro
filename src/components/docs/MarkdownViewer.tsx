@@ -1,13 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
-import gsap from "gsap";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeSlug from "rehype-slug";
-import rehypeHighlight from "rehype-highlight";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
+import { useMarkdownPlugins } from "@/lib/markdown-plugins";
 import {
   Check,
   Copy,
@@ -41,7 +44,9 @@ import { Spotlight } from "./PresentationMode";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ReadingMode } from "@/lib/persistence";
 import { slugify } from "@/lib/markdown-utils";
-import { Mermaid } from "./Mermaid";
+import { MermaidBlock } from "./MermaidLazy";
+import { ReadingProgress } from "./ReadingProgress";
+import { MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
 import { detectEmbed, EmbedFrame, isVideoUrl, VideoPlayer } from "@/lib/media-embeds";
 import { Lightbox } from "./Lightbox";
 import { HL_COLORS, hlGroup, type Highlight } from "@/lib/dom-highlighter";
@@ -64,8 +69,13 @@ import {
   type SavedDraft,
   type SavedItem,
 } from "@/lib/saved-items";
-import { locateInSource, caretTop } from "@/lib/source-locate";
-import { splitIntoSubtopics, headingChunkMap } from "@/lib/markdown-utils";
+import { locateInSource } from "@/lib/source-locate";
+import {
+  fileSubtopics,
+  headingChunkMap,
+  readingMinutes,
+  wordCount,
+} from "@/lib/markdown-utils";
 import { InlineArtifact } from "./InlineArtifact";
 import { InteractiveBlock } from "./InteractiveBlock";
 import {
@@ -96,6 +106,13 @@ interface Props {
   activeSubtopicId: string | null;
   highlightQuery: string | null;
   onContentChange: (fileId: string, content: string) => void;
+  /**
+   * Id of a file that should open straight in the editor — a document the
+   * reader just created from the sidebar, so pasting markdown is the first
+   * thing they can do. Cleared through `onStartInEditConsumed` once honoured.
+   */
+  startInEditFileId?: string | null;
+  onStartInEditConsumed?: () => void;
   nextReadingMin: number | null;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
@@ -137,6 +154,13 @@ interface Props {
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
 
 /**
+ * Viewer-specific remark passes, held at module scope so the array identity is
+ * stable. Rebuilding it per render would make react-markdown re-parse the whole
+ * document every time this component re-renders for any other reason.
+ */
+const EXTRA_REMARK_PLUGINS = [remarkInteractiveBlockMeta];
+
+/**
  * Star affordances live deep inside the rendered markdown (a heading, a table,
  * a code block), far from the state that knows what is starred. They read it
  * through this context rather than through props so that saving something
@@ -156,11 +180,18 @@ interface SavedContextValue {
   toggle: (draft: SavedDraft) => void;
   remove: (id: string) => void;
   enabled: boolean;
+  /**
+   * Changes when the rendered markdown does. `SavableBlock` reads its own
+   * `textContent` to know what it would save, and that read walks the block's
+   * whole subtree — it must happen when the document changes, not on every
+   * render of every block.
+   */
+  revision: string;
 }
 
 const SavedContext = createContext<SavedContextValue | null>(null);
 
-export function MarkdownViewer({
+function MarkdownViewerImpl({
   file,
   prevFile,
   nextFile,
@@ -168,6 +199,8 @@ export function MarkdownViewer({
   activeSubtopicId,
   highlightQuery,
   onContentChange,
+  startInEditFileId,
+  onStartInEditConsumed,
   nextReadingMin,
   isBookmarked,
   onToggleBookmark,
@@ -195,13 +228,25 @@ export function MarkdownViewer({
 }: Props) {
   const singleMode = readingMode === "single";
   const containerRef = useRef<HTMLDivElement>(null);
-  const [progress, setProgress] = useState(0);
-  const [isScrolling, setIsScrolling] = useState(false);
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [presentMode, setPresentMode] = useState(false);
-  const [draft, setDraft] = useState(file.content);
+  // The draft text itself lives inside <MarkdownEditor>. Only the source the
+  // editor opened with is kept here, so Cancel can put it back.
   const originalContentRef = useRef(file.content);
+
+  const saveDraft = useCallback(
+    (content: string) => onContentChange(file.id, content),
+    [onContentChange, file.id],
+  );
+  const leaveEditMode = useCallback(() => setEditMode(false), []);
+  const cancelEdit = useCallback(() => {
+    onContentChange(file.id, originalContentRef.current);
+    setEditMode(false);
+  }, [onContentChange, file.id]);
+  const enterEditMode = useCallback(() => {
+    originalContentRef.current = file.content;
+    setEditMode(true);
+  }, [file.content]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -220,7 +265,7 @@ export function MarkdownViewer({
   };
 
   const allChunks = useMemo(
-    () => file.subtopics || splitIntoSubtopics(file.content, file.name),
+    () => fileSubtopics(file),
     [file.subtopics, file.content, file.name],
   );
 
@@ -272,6 +317,15 @@ export function MarkdownViewer({
   const fullRender = useMemo(() => {
     return prepareWorkspaceEmbeds(file.content);
   }, [file.content]);
+
+  // The markdown actually handed to the renderer. Resolved once here so the
+  // plugin hook and the renderer never disagree about which text is on screen.
+  const markdownSource = singleMode ? fullRender : renderContent;
+
+  // Syntax highlighting and math typesetting are fetched only for documents
+  // that contain code or math — see `useMarkdownPlugins`. Both plugin arrays
+  // are memoized, because a fresh array identity makes react-markdown re-parse.
+  const { remarkPlugins, rehypePlugins } = useMarkdownPlugins(markdownSource, EXTRA_REMARK_PLUGINS);
 
   const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
 
@@ -338,8 +392,9 @@ export function MarkdownViewer({
       isSaved: (probe) => findSaved(saved, { fileId: file.id, ...probe }),
       toggle: (draft) => onToggleSaved?.(draft),
       remove: (id) => onRemoveSaved?.(id),
+      revision: markdownSource,
     }),
-    [saved, savedSubtopicId, onToggleSaved, onRemoveSaved, editMode, file.id],
+    [saved, savedSubtopicId, onToggleSaved, onRemoveSaved, editMode, file.id, markdownSource],
   );
 
   // Opening a saved item from the Saved list: once the target page is rendered,
@@ -405,7 +460,7 @@ export function MarkdownViewer({
   // "Inspect" — the reader's answer to DevTools' inspect element. Take the
   // rendered text under the pointer, find where it lives in the markdown
   // source, and drop the editor's caret on it, selected and scrolled into view.
-  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<MarkdownEditorHandle>(null);
   const [pendingSelect, setPendingSelect] = useState<{ start: number; end: number } | null>(null);
   const [inspectMissed, setInspectMissed] = useState(false);
 
@@ -422,25 +477,17 @@ export function MarkdownViewer({
     setMenu(null);
     window.getSelection()?.removeAllRanges();
     setInspectMissed(!span);
-    // The editor edits `draft`; make sure it starts from what's on screen.
-    originalContentRef.current = file.content;
-    setDraft(file.content);
     setEditMode(true);
     setPendingSelect(span ?? { start: Math.max(0, chunkStart), end: Math.max(0, chunkStart) });
   };
 
-  // Applied once the textarea has mounted with the new draft.
+  // Applied once the editor has mounted with the document's source.
   useEffect(() => {
     if (!pendingSelect || !editMode) return;
-    const ta = editorRef.current;
-    if (!ta) return;
     const { start, end } = pendingSelect;
     setPendingSelect(null);
-    ta.focus({ preventScroll: true });
-    ta.setSelectionRange(start, end);
-    ta.scrollTop = Math.max(0, caretTop(ta, start) - ta.clientHeight / 3);
-    ta.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [pendingSelect, editMode, draft]);
+    editorRef.current?.select(start, end);
+  }, [pendingSelect, editMode]);
 
   // The "couldn't find it" notice is per-jump, not sticky.
   useEffect(() => {
@@ -630,39 +677,44 @@ export function MarkdownViewer({
   useEffect(() => setMenu(null), [activeChunk.id, file.id, editMode]);
 
   useEffect(() => {
-    setDraft(file.content);
-    setEditMode(false);
+    originalContentRef.current = file.content;
+    // A document the reader just created opens in the editor with the caret
+    // already in it; every other document opens as reading.
+    const startInEdit = startInEditFileId === file.id;
+    setEditMode(startInEdit);
+    if (startInEdit) {
+      setPendingSelect({ start: 0, end: 0 });
+      onStartInEditConsumed?.();
+    }
+    // Only on a document switch — `startInEditFileId` is consumed here, and
+    // re-running when it clears would drop the reader out of the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.id]);
 
   // Gentle fade/rise when switching documents — reads as a settle, not a flash.
+  //
+  // Driven by the Web Animations API rather than GSAP: this and one sidebar
+  // tween were the app's only two uses of a 153 kB library, and both are a
+  // single keyframe pair the platform runs on the compositor for free.
+  //
+  // `fill` is deliberately left at its default so no residual transform stays
+  // behind — any transform, even an identity one, turns this element into the
+  // containing block for `position: fixed` descendants, which would re-anchor
+  // the selection popover to the scroller instead of the viewport.
   useEffect(() => {
-    if (!containerRef.current) return;
-    const ctx = gsap.fromTo(
-      containerRef.current,
-      { opacity: 0, y: 10 },
-      {
-        opacity: 1,
-        y: 0,
-        duration: 0.4,
-        ease: "power2.out",
-        // Leave no residual transform behind: any transform, even an identity
-        // one, turns this element into the containing block for `position:
-        // fixed` descendants, which would re-anchor the selection popover to
-        // the scroller instead of the viewport.
-        clearProps: "transform",
-      },
+    const el = containerRef.current;
+    if (!el?.animate) return;
+    const anim = el.animate(
+      [
+        { opacity: 0, transform: "translateY(10px)" },
+        { opacity: 1, transform: "translateY(0)" },
+      ],
+      { duration: 400, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
     );
-    return () => {
-      ctx.kill();
-    };
+    return () => anim.cancel();
   }, [activeChunk.id, file.id]);
 
-  // Autosave draft to parent
-  useEffect(() => {
-    if (!editMode) return;
-    const t = setTimeout(() => onContentChange(file.id, draft), 400);
-    return () => clearTimeout(t);
-  }, [draft, editMode, file.id, onContentChange]);
+  // Autosaving the draft is the editor's own concern now — see MarkdownEditor.
 
   const scrollToTop = () => {
     if (presentMode && containerRef.current) {
@@ -694,67 +746,16 @@ export function MarkdownViewer({
     else scrollToTop();
   }, [singleMode, activeSubtopicId, file.id]);
 
-  // Reading progress: how far down the rendered document the reader has come,
-  // as a 0–100 percentage. The article scrolls inside `containerRef`, but fall
-  // back to the document scroller in case an ancestor layout owns the overflow.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+  // Reading progress now lives in <ReadingProgress>, which writes the
+  // percentage straight to its own DOM node. It used to be state up here, and
+  // because the number changes on nearly every frame of a scroll it re-rendered
+  // this whole component — markdown tree included — once per frame.
 
-    let frame = 0;
-    const measure = () => {
-      frame = 0;
-      const inner = el.scrollHeight - el.clientHeight > 1;
-      const doc = document.documentElement;
-      const top = inner ? el.scrollTop : window.scrollY;
-      const span = inner ? el.scrollHeight - el.clientHeight : doc.scrollHeight - window.innerHeight;
-      // Nothing to scroll: the whole page is already on screen, so it's read.
-      const pct = span <= 1 ? 100 : (top / span) * 100;
-      setProgress(Math.min(100, Math.max(0, Math.round(pct))));
-    };
-    const schedule = () => {
-      if (!frame) frame = requestAnimationFrame(measure);
-      setIsScrolling(true);
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-      scrollTimeoutRef.current = setTimeout(() => setIsScrolling(false), 1500);
-    };
-
-    measure();
-    el.addEventListener("scroll", schedule, { passive: true });
-    window.addEventListener("scroll", schedule, { passive: true });
-    window.addEventListener("resize", schedule);
-    // Images, embeds and KaTeX settle after the first paint and change the
-    // scrollable span; re-measure instead of leaving a stale percentage.
-    const ro = new ResizeObserver(schedule);
-    ro.observe(el);
-    if (contentRef.current) ro.observe(contentRef.current);
-
-    return () => {
-      if (frame) cancelAnimationFrame(frame);
-      ro.disconnect();
-      el.removeEventListener("scroll", schedule);
-      window.removeEventListener("scroll", schedule);
-      window.removeEventListener("resize", schedule);
-    };
-  }, [file.id, activeChunk.id, editMode, presentMode, singleMode, renderContent, fullRender]);
-
-  // Save shortcut
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && editMode) {
-        e.preventDefault();
-        onContentChange(file.id, draft);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [draft, editMode, file.id, onContentChange]);
+  // The Cmd/Ctrl+S shortcut belongs to the editor, which is where the draft is.
 
   const stats = useMemo(() => {
     const src = singleMode ? file.content : activeChunk.content;
-    const words = src.trim().split(/\s+/).filter(Boolean).length;
-    const readingMin = Math.max(1, Math.round(words / 220));
-    return { words, readingMin };
+    return { words: wordCount(src), readingMin: readingMinutes(src) };
   }, [singleMode, file.content, activeChunk.content]);
 
   // Search-query highlighting stays a lightweight React wrap. Persistent
@@ -941,8 +942,10 @@ export function MarkdownViewer({
                   </div>
                   <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
                     {allChunks.map((chunk) => {
-                      const words = chunk.content.trim().split(/\s+/).filter(Boolean).length;
-                      const readingMin = Math.max(1, Math.round(words / 220));
+                      // Cached word count — this list is rebuilt on every render
+                      // of the viewer, and scanning every section's text each
+                      // time was O(document) for a dropdown that is usually shut.
+                      const readingMin = readingMinutes(chunk.content);
                       return (
                         <SelectItem
                           key={chunk.id}
@@ -1013,11 +1016,7 @@ export function MarkdownViewer({
                 )}
                 {!editMode && (
                   <button
-                    onClick={() => {
-                      originalContentRef.current = file.content;
-                      setDraft(file.content);
-                      setEditMode(true);
-                    }}
+                    onClick={enterEditMode}
                     title="Edit document"
                     className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   >
@@ -1057,11 +1056,7 @@ export function MarkdownViewer({
                       </DropdownMenuItem>
                     )}
                     {!editMode && (
-                      <DropdownMenuItem onClick={() => {
-                        originalContentRef.current = file.content;
-                        setDraft(file.content);
-                        setEditMode(true);
-                      }}>
+                      <DropdownMenuItem onClick={enterEditMode}>
                         <Pencil className="mr-2 h-4 w-4" />
                         Edit document
                       </DropdownMenuItem>
@@ -1299,47 +1294,15 @@ export function MarkdownViewer({
           )}
 
           {editMode ? (
-            <div>
-              {/* Sticky exit bar: leaving edit mode stays reachable no matter how
-                  far the reader scrolls. Single-pane editor keeps typing smooth —
-                  no live full-document re-render on every keystroke. */}
-              <div className="sticky top-16 z-(--z-sticky) -mx-1 mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/90 px-3 py-2 backdrop-blur">
-                <span className="truncate text-xs font-medium text-muted-foreground">
-                  Editing — changes save automatically
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setDraft(originalContentRef.current);
-                      onContentChange(file.id, originalContentRef.current);
-                      setEditMode(false);
-                    }}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition-opacity hover:bg-muted/80 active:scale-95 border border-border"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => setEditMode(false)}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95"
-                  >
-                    <Eye className="h-3.5 w-3.5" /> Done · Preview
-                  </button>
-                </div>
-              </div>
-              {inspectMissed && (
-                <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
-                  Couldn't pin that text to a spot in the source — the editor is open at the start
-                  of this section instead.
-                </div>
-              )}
-              <textarea
-                ref={editorRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                spellCheck={false}
-                className="min-h-[70vh] w-full resize-y rounded-lg border border-border bg-muted/30 p-4 font-mono text-sm leading-relaxed outline-none focus:border-primary/50"
-              />
-            </div>
+            <MarkdownEditor
+              ref={editorRef}
+              fileId={file.id}
+              initialContent={file.content}
+              onSave={saveDraft}
+              onDone={leaveEditMode}
+              onCancel={cancelEdit}
+              inspectMissed={inspectMissed}
+            />
           ) : (
             <div
               key={singleMode ? "full" : activeChunk.id}
@@ -1349,15 +1312,11 @@ export function MarkdownViewer({
             >
               <SavedContext.Provider value={savedCtx}>
                 <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath, remarkInteractiveBlockMeta]}
-                  rehypePlugins={[
-                    rehypeSlug,
-                    rehypeKatex,
-                    [rehypeHighlight, { detect: true, ignoreMissing: true }],
-                  ]}
+                  remarkPlugins={remarkPlugins}
+                  rehypePlugins={rehypePlugins}
                   components={components}
                 >
-                  {singleMode ? fullRender : renderContent}
+                  {markdownSource}
                 </ReactMarkdown>
               </SavedContext.Provider>
             </div>
@@ -1434,17 +1393,24 @@ export function MarkdownViewer({
         </article>
       </div>
 
-      {isScrolling && !editMode && !presentMode && (
-        <div className="fixed bottom-6 right-6 z-50 flex h-8 min-w-[3rem] items-center justify-center rounded-full bg-muted/40 backdrop-blur-sm px-2.5 tabular-nums text-xs font-medium text-muted-foreground opacity-60 transition-all duration-300 animate-in fade-in zoom-in-95 pointer-events-none shadow-sm">
-          {progress}%
-        </div>
-      )}
+      <ReadingProgress
+        containerRef={containerRef}
+        contentRef={contentRef}
+        revision={markdownSource}
+        hidden={editMode || presentMode}
+      />
       </div>
     </div>
   );
 }
 
-
+/**
+ * Rendering a document means parsing markdown, painting highlights and walking
+ * the resulting tree, so this component must not re-render just because the app
+ * shell around it did. Every prop it takes is either a primitive or held to a
+ * stable identity in `DocsApp`, which is what makes the memo effective.
+ */
+export const MarkdownViewer = memo(MarkdownViewerImpl);
 
 /**
  * Wraps a block (table, code fence, quote, image) with a hover star that saves
@@ -1469,14 +1435,16 @@ function SavableBlock({
   const ref = useRef<HTMLDivElement & HTMLSpanElement>(null);
   const [text, setText] = useState("");
 
-  // No dependency array on purpose: the block's text changes whenever the
-  // document is edited, and the star has to keep pointing at the new text. The
-  // update is idempotent, so it settles after one extra render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Re-read the block's own text when the document changes. This used to run
+  // with no dependency array at all, so every render of the page walked the
+  // subtree of every table, code fence, quote and image on it — O(document) of
+  // DOM traversal per render, plus a second render pass to settle. Keying it to
+  // the rendered source keeps the star pointing at the right text (the whole
+  // point of the original comment) at a fraction of the cost.
   useEffect(() => {
     const next = ref.current?.textContent?.trim() ?? "";
     setText((prev) => (prev === next ? prev : next));
-  });
+  }, [ctx?.revision]);
 
   if (!ctx?.enabled) return <>{children}</>;
 
@@ -1596,7 +1564,7 @@ function CodeBlock({ children, ...rest }: any) {
   const cls = codeEl?.props?.className ?? "";
   if (typeof cls === "string" && /language-mermaid/.test(cls)) {
     const raw = extractText(codeEl?.props?.children);
-    return <Mermaid code={raw} />;
+    return <MermaidBlock code={raw} />;
   }
 
   const encodedLang = /language-([\w+-]+)/.exec(cls)?.[1];

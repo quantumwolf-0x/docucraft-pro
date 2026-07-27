@@ -33,7 +33,7 @@ export function BottomNav({
   };
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-(--z-nav) flex h-16 items-center justify-between border-t border-border bg-background/80 px-6 backdrop-blur-lg lg:hidden">
+    <nav className="app-surface fixed bottom-0 left-0 right-0 z-(--z-nav) flex h-16 items-center justify-between border-t border-border px-6 lg:hidden">
       {/* 1. Home */}
       <button
         onClick={onHome}
