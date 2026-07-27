@@ -198,41 +198,56 @@ function Stage({
 }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  // Wheel-zoom stays off until the reader opts in via a zoom button, so
-  // scrolling the page over a diagram scrolls the page (not the diagram).
-  const [zoomEnabled, setZoomEnabled] = useState(false);
-  const zoomEnabledRef = useRef(false);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    zoomEnabledRef.current = zoomEnabled;
-  }, [zoomEnabled]);
-
-  // Wheel-to-zoom via a non-passive native listener so we can preventDefault
-  // (React's onWheel is passive and would let the page scroll instead). Only
-  // hijack the wheel once zoom has been enabled; otherwise let the page scroll.
+  // Zooming is the +/− buttons' job only. Pinch (which trackpads report as
+  // ctrl+wheel, Safari as gesture* events) is swallowed here rather than acted
+  // on: left alone it becomes a browser page zoom that outlives the viewer and
+  // leaves the document behind it scaled. A plain wheel still scrolls the page.
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (!zoomEnabledRef.current) return;
-      e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      setZoom((z) => Math.min(8, Math.max(0.3, z * factor)));
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
     };
+    const swallow = (e: Event) => e.preventDefault();
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("gesturestart", swallow);
+    el.addEventListener("gesturechange", swallow);
+    el.addEventListener("gestureend", swallow);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", swallow);
+      el.removeEventListener("gesturechange", swallow);
+      el.removeEventListener("gestureend", swallow);
+    };
   }, []);
 
-  const zoomIn = () => {
-    setZoomEnabled(true);
-    setZoom((z) => Math.min(8, z * 1.25));
-  };
-  const zoomOut = () => {
-    setZoomEnabled(true);
-    setZoom((z) => Math.max(0.3, z / 1.25));
-  };
+  const zoomIn = () => setZoom((z) => Math.min(8, z * 1.25));
+  const zoomOut = () => setZoom((z) => Math.max(0.3, z / 1.25));
+
+  // Fullscreen owns the keyboard zoom shortcuts too, so cmd/ctrl +/-/0 scales
+  // the diagram rather than the document underneath it.
+  useEffect(() => {
+    if (!fill) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        zoomOut();
+      } else if (e.key === "0") {
+        e.preventDefault();
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+      }
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [fill]);
 
   return (
     <div className="group/stage relative flex h-full w-full flex-col">
@@ -256,6 +271,9 @@ function Stage({
         className={`flex flex-1 cursor-grab items-center justify-center overflow-hidden p-4 active:cursor-grabbing ${
           fill ? "" : "min-h-40"
         }`}
+        // Blocks touch pinch-zoom (which would zoom the page, not the diagram).
+        // Inline still allows one-finger scrolling past the diagram.
+        style={{ touchAction: fill ? "none" : "pan-x pan-y" }}
         onMouseDown={(e) => (dragRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y })}
         onMouseMove={(e) => {
           if (!dragRef.current) return;

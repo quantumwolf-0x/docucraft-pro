@@ -52,6 +52,10 @@ import {
   offsetFromPoint,
   firstTextRange,
   releaseTextIndex,
+  contextAround,
+  findAnchor,
+  sameQuote,
+  textBetween,
 } from "@/lib/text-offsets";
 import { locateInSource, caretTop } from "@/lib/source-locate";
 import { splitIntoSubtopics, headingChunkMap } from "@/lib/markdown-utils";
@@ -86,6 +90,11 @@ interface Props {
   onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">) => void;
   onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
   onRemoveHighlight: (id: string) => void;
+  /**
+   * Corrected anchors, found while painting: the document was edited and these
+   * highlights had to be re-located. Persisted, but not as an undoable step.
+   */
+  onRepairHighlights?: (patches: Array<{ id: string; patch: Partial<Highlight> }>) => void;
   onHome?: () => void;
   workspaceId?: string | null;
   workspaceRevision?: string;
@@ -116,6 +125,7 @@ export function MarkdownViewer({
   onAddHighlight,
   onUpdateHighlight,
   onRemoveHighlight,
+  onRepairHighlights,
   onHome,
   workspaceId,
   workspaceRevision,
@@ -168,6 +178,11 @@ export function MarkdownViewer({
     );
   }, [allChunks, activeSubtopicId, chunkForHeading, file.content, file.name]);
 
+  // Section ids are slugged from headings, so editing a heading renames them.
+  // Highlights pointing at an id that no longer exists aren't lost — they're
+  // re-anchored by text and re-homed to whichever page now holds that text.
+  const knownChunkIds = useMemo(() => new Set(allChunks.map((c) => c.id)), [allChunks]);
+
   const chunkIndex = allChunks.findIndex((s) => s.id === activeChunk.id);
   const isLastChunk = chunkIndex === allChunks.length - 1;
   const prevChunk = chunkIndex > 0 ? allChunks[chunkIndex - 1] : null;
@@ -212,6 +227,8 @@ export function MarkdownViewer({
         text: string;
         start: number;
         end: number;
+        prefix: string;
+        suffix: string;
         x: number;
         y: number;
         label: string;
@@ -228,11 +245,16 @@ export function MarkdownViewer({
     if (!sel) return;
     const range = window.getSelection()?.getRangeAt(0);
     const r = range?.getBoundingClientRect();
+    // Captured now, while the offsets are still true: the surrounding text is
+    // what lets the highlight find itself again after the document is edited.
+    const ctx = contextAround(contentRef.current, sel.start, sel.end);
     setMenu({
       mode: "create",
       text: sel.text,
       start: sel.start,
       end: sel.end,
+      prefix: ctx.prefix,
+      suffix: ctx.suffix,
       x: at ? at.x : r ? r.left + r.width / 2 : window.innerWidth / 2,
       y: at ? at.y : r ? r.top : 120,
       label: "",
@@ -317,29 +339,85 @@ export function MarkdownViewer({
     const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
       Map<string, any> | undefined;
     if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
+    // Mid-edit the rendered document is a moving target (the draft autosaves
+    // every 400ms). Re-anchoring waits for the reader to leave the editor.
+    if (editMode) return;
 
     // Deferred to the next frame so adding a highlight doesn't repaint every
     // other one synchronously inside the same commit the reader is watching.
     const frame = requestAnimationFrame(() => {
       const groups: Record<string, Range[]> = {};
+      // Corrections found along the way, written back once at the end.
+      const repairs: Array<{ id: string; patch: Partial<Highlight> }> = [];
+
       for (const hl of highlights) {
-        let range: Range | null;
+        // Which highlights this container can show, and whether its offsets are
+        // measured in the same space as the stored ones. Section highlights
+        // carry offsets relative to their section, meaningless in the whole-doc
+        // render; whole-doc highlights are the reverse.
+        const sectionExists = !hl.subtopicId || knownChunkIds.has(hl.subtopicId);
+        let owned: boolean;
         if (singleMode) {
-          // Whole-doc view. Highlights made here carry no subtopicId and full-doc
-          // offsets — use them directly. Section highlights (subtopicId set) have
-          // offsets relative to their section, meaningless here, so anchor by text.
-          range =
-            !hl.subtopicId && typeof hl.start === "number" && typeof hl.end === "number"
-              ? buildRange(container, hl.start, hl.end)
-              : firstTextRange(container, hl.text);
+          owned = !hl.subtopicId;
         } else {
-          if (hl.subtopicId && hl.subtopicId !== activeChunk.id) continue;
-          range =
-            typeof hl.start === "number" && typeof hl.end === "number"
-              ? buildRange(container, hl.start, hl.end)
-              : firstTextRange(container, hl.text);
+          // A stale subtopicId means the heading it was slugged from was edited.
+          // Rather than dropping the highlight, let the current page try to
+          // re-anchor it by text and adopt it if the text is here.
+          if (sectionExists && hl.subtopicId !== activeChunk.id) continue;
+          owned = hl.subtopicId === activeChunk.id;
         }
-        if (!range || range.collapsed) continue;
+
+        // Fast path: the stored offsets still cover the stored text.
+        let range: Range | null = null;
+        if (owned && typeof hl.start === "number" && typeof hl.end === "number") {
+          const at = buildRange(container, hl.start, hl.end);
+          if (at && !at.collapsed && sameQuote(textBetween(container, hl.start, hl.end), hl.text)) {
+            range = at;
+          }
+        }
+
+        // The document moved under the highlight (an edit above it, a rewritten
+        // passage, a renamed section). Find the passage again by its text.
+        if (!range) {
+          const anchor = findAnchor(container, hl.text, hl.prefix, hl.suffix, hl.start);
+          if (anchor) {
+            range = buildRange(container, anchor.start, anchor.end);
+            // Only persist offsets measured in this highlight's own space —
+            // writing whole-doc offsets onto a section highlight (or the
+            // reverse) would corrupt it for the other reading mode.
+            if (range && !range.collapsed && (owned || !sectionExists)) {
+              repairs.push({
+                id: hl.id,
+                patch: {
+                  start: anchor.start,
+                  end: anchor.end,
+                  ...contextAround(container, anchor.start, anchor.end),
+                  ...(sectionExists
+                    ? null
+                    : { subtopicId: singleMode ? undefined : activeChunk.id }),
+                  ...(hl.orphaned ? { orphaned: false } : null),
+                },
+              });
+            }
+          }
+          // Legacy highlights stored before offsets existed: first match wins,
+          // as before.
+          if (!range) range = firstTextRange(container, hl.text);
+        }
+
+        if (!range || range.collapsed) {
+          // Not on this page. Only call it gone once the markdown source itself
+          // no longer contains the text — in paginated mode the page on screen
+          // says nothing about the rest of the document. Flagged, never
+          // deleted: an edit must not destroy a reader's note.
+          if (!hl.orphaned && !locateInSource(file.content, hl.text)) {
+            repairs.push({ id: hl.id, patch: { orphaned: true } });
+          }
+          continue;
+        }
+        if (hl.orphaned && !repairs.some((r) => r.id === hl.id)) {
+          repairs.push({ id: hl.id, patch: { orphaned: false } });
+        }
         const g = hlGroup(hl.color);
         (groups[g] ||= []).push(range);
       }
@@ -348,13 +426,27 @@ export function MarkdownViewer({
       for (const [g, ranges] of Object.entries(groups)) {
         CSSH.set(g, new (window as any).Highlight(...ranges));
       }
+
+      // Re-runs this effect, which then takes the fast path for every repaired
+      // highlight and produces no further repairs.
+      if (repairs.length) onRepairHighlights?.(repairs);
     });
 
     return () => {
       cancelAnimationFrame(frame);
       HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
     };
-  }, [highlights, activeChunk.id, renderContent, fullRender, editMode, singleMode]);
+  }, [
+    highlights,
+    activeChunk.id,
+    renderContent,
+    fullRender,
+    editMode,
+    singleMode,
+    knownChunkIds,
+    file.content,
+    onRepairHighlights,
+  ]);
 
   // The offset index outlives this component's containers; drop it on unmount
   // so a stale document can't keep its text nodes (or its observer) alive.
@@ -838,6 +930,8 @@ export function MarkdownViewer({
                         subtopicId: singleMode ? undefined : activeChunk.id,
                         start: menu.start,
                         end: menu.end,
+                        prefix: menu.prefix,
+                        suffix: menu.suffix,
                       });
                       window.getSelection()?.removeAllRanges();
                     } else {
@@ -865,6 +959,8 @@ export function MarkdownViewer({
                       subtopicId: singleMode ? undefined : activeChunk.id,
                       start: menu.start,
                       end: menu.end,
+                      prefix: menu.prefix,
+                      suffix: menu.suffix,
                     });
                     window.getSelection()?.removeAllRanges();
                   } else {
@@ -917,6 +1013,8 @@ export function MarkdownViewer({
                     subtopicId: singleMode ? undefined : activeChunk.id,
                     start: menu.start,
                     end: menu.end,
+                    prefix: menu.prefix,
+                    suffix: menu.suffix,
                   });
                   window.getSelection()?.removeAllRanges();
                   setMenu(null);

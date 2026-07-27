@@ -1,4 +1,4 @@
-import { Highlighter, Trash2, Tag } from "lucide-react";
+import { Highlighter, Trash2, Tag, Unlink } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import type { Highlight } from "@/lib/dom-highlighter";
 
@@ -69,6 +69,15 @@ export function HighlightsOnlyModal({
                     <span className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
                       <Tag className="h-3 w-3 shrink-0" />
                       {hl.label}
+                    </span>
+                  )}
+                  {/* The text was edited out of the document. The highlight is
+                      kept here — with its note — rather than deleted, so the
+                      reader decides what happens to it. */}
+                  {hl.orphaned && (
+                    <span className="mt-1.5 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+                      <Unlink className="h-3 w-3 shrink-0" />
+                      This text is no longer in the document
                     </span>
                   )}
                 </button>

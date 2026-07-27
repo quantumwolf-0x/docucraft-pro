@@ -680,6 +680,7 @@ function ImageViewer({
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -716,11 +717,29 @@ function ImageViewer({
       return next;
     });
 
-  const onWheel = (event: React.WheelEvent) => {
-    if (!event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
-    zoomBy(event.deltaY < 0 ? 1.1 : 0.9);
-  };
+  // Zooming is the +/− buttons' job only. Pinch (ctrl/meta+wheel on trackpads,
+  // gesture* in Safari) is swallowed rather than acted on: left alone it becomes
+  // a browser page zoom that persists after leaving the viewer. Native
+  // non-passive listeners — React's onWheel is passive, so preventDefault there
+  // is a no-op.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) event.preventDefault();
+    };
+    const swallow = (event: Event) => event.preventDefault();
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("gesturestart", swallow);
+    el.addEventListener("gesturechange", swallow);
+    el.addEventListener("gestureend", swallow);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", swallow);
+      el.removeEventListener("gesturechange", swallow);
+      el.removeEventListener("gestureend", swallow);
+    };
+  }, [src, broken]);
   const onPointerDown = (event: React.PointerEvent) => {
     if (zoom <= 1) return;
     (event.target as Element).setPointerCapture(event.pointerId);
@@ -746,6 +765,27 @@ function ImageViewer({
         onNavFile={onNavFile}
         action={
           <div className="flex items-center gap-1">
+            <IconBtn label="Zoom out" onClick={() => zoomBy(1 / 1.25)} disabled={!src || broken}>
+              <ZoomOut className="h-4 w-4" />
+            </IconBtn>
+            <button
+              onClick={reset}
+              disabled={!src || broken}
+              title="Reset zoom"
+              className="min-w-12 rounded-md px-1 text-xs font-medium tabular-nums text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <IconBtn label="Zoom in" onClick={() => zoomBy(1.25)} disabled={!src || broken}>
+              <ZoomIn className="h-4 w-4" />
+            </IconBtn>
+            <IconBtn
+              label="Rotate"
+              onClick={() => setRotation((r) => (r + 90) % 360)}
+              disabled={!src || broken}
+            >
+              <RotateCw className="h-4 w-4" />
+            </IconBtn>
             <IconBtn
               label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
               onClick={toggleFullscreen}
@@ -762,12 +802,16 @@ function ImageViewer({
           <ErrorState message="This image could not be decoded by the browser." />
         ) : (
           <div
-            onWheel={onWheel}
+            ref={canvasRef}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             className="image-canvas flex min-h-[calc(100dvh-7.5rem)] items-center justify-center overflow-hidden p-4 md:p-8"
-            style={{ cursor: zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "default" }}
+            style={{
+              cursor: zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "default",
+              // Blocks touch pinch-zoom, which would zoom the page not the image.
+              touchAction: "none",
+            }}
           >
             <img
               src={src}

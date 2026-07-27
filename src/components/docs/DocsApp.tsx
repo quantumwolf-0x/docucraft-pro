@@ -31,6 +31,8 @@ import { parseHeadings, readingMinutes, splitIntoSubtopics } from "@/lib/markdow
 import { getDocumentKind, importDocumentFile, SUPPORTED_ACCEPT } from "@/lib/document-utils";
 import { clearArtifactResolutionCache } from "@/lib/workspace-artifacts";
 import { toast } from "sonner";
+import { useHistory } from "@/hooks/use-history";
+import { isEditableTarget, hasModKey } from "@/lib/keyboard";
 import {
   persistence,
   loadPrefs,
@@ -92,7 +94,20 @@ export function DocsApp() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [bookmarks, setBookmarks] = useState<string[]>([]);
-  const [highlights, setHighlights] = useState<Highlight[]>([]);
+  // Highlights are the one reader action with no other way back — a mis-drag
+  // silently replaces whatever it overlaps — so they get an undo stack.
+  // `resetHighlights` loads a workspace without making the previous one's
+  // highlights reachable by pressing undo.
+  const {
+    state: highlights,
+    set: setHighlights,
+    amend: amendHighlights,
+    reset: resetHighlights,
+    undo: undoHighlights,
+    redo: redoHighlights,
+    canUndo: canUndoHighlights,
+    canRedo: canRedoHighlights,
+  } = useHistory<Highlight[]>([]);
   // File whose highlights are shown in isolation via the "Show highlights only"
   // menu item; null when the modal is closed.
   const [highlightsOnlyFileId, setHighlightsOnlyFileId] = useState<string | null>(null);
@@ -329,7 +344,7 @@ export function DocsApp() {
     setExpanded(ws.ui?.expanded ?? {});
     setSidebarCollapsed(!!ws.ui?.sidebarCollapsed);
     setBookmarks(ws.bookmarks ?? []);
-    setHighlights((ws.highlights ?? []).filter((h) => typeof h.text === "string"));
+    resetHighlights((ws.highlights ?? []).filter((h) => typeof h.text === "string"));
     setWorkspaceId(ws.id);
     workspaceIdRef.current = ws.id;
     workspaceNameRef.current = ws.name;
@@ -345,7 +360,7 @@ export function DocsApp() {
       () => setSaveStatus((s) => (s === "restored" ? "saved" : s)),
       2500,
     );
-  }, []);
+  }, [resetHighlights]);
 
   const refreshWorkspaceList = useCallback(async () => {
     const list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
@@ -731,6 +746,65 @@ export function DocsApp() {
     },
     [markDirty],
   );
+
+  // The viewer re-anchors highlights whose text moved (the document was edited)
+  // and hands back the corrected offsets. Not an undoable step — the reader
+  // didn't do it — but persisted, so the repair survives a reload.
+  const repairHighlights = useCallback(
+    (patches: Array<{ id: string; patch: Partial<Highlight> }>) => {
+      if (!patches.length) return;
+      const byId = new Map(patches.map((p) => [p.id, p.patch]));
+      amendHighlights((prev) => {
+        let changed = false;
+        const next = prev.map((h) => {
+          const patch = byId.get(h.id);
+          if (!patch) return h;
+          const merged = { ...h, ...patch };
+          if ((Object.keys(patch) as Array<keyof Highlight>).every((k) => h[k] === merged[k])) {
+            return h;
+          }
+          changed = true;
+          return merged;
+        });
+        return changed ? next : prev;
+      });
+      markDirty();
+    },
+    [amendHighlights, markDirty],
+  );
+
+  // Undo/redo for highlights. Cmd on macOS, Ctrl elsewhere; redo accepts both
+  // the Windows form (Ctrl+Y) and the macOS one (Cmd+Shift+Z).
+  //
+  // Two things are deliberately left alone: a focused input or textarea keeps
+  // its native undo (the markdown editor lives in one), and if there is nothing
+  // to undo the event is not consumed, so the browser's own undo still works.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!hasModKey(e)) return;
+      if (isEditableTarget(e.target)) return;
+      const key = e.key.toLowerCase();
+
+      const isRedo = key === "y" || (key === "z" && e.shiftKey);
+      const isUndo = key === "z" && !e.shiftKey;
+      if (!isRedo && !isUndo) return;
+
+      if (isRedo) {
+        if (!canRedoHighlights) return;
+        e.preventDefault();
+        redoHighlights();
+        toast("Redid highlight change");
+      } else {
+        if (!canUndoHighlights) return;
+        e.preventDefault();
+        undoHighlights();
+        toast("Undid highlight change");
+      }
+      markDirty();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canUndoHighlights, canRedoHighlights, undoHighlights, redoHighlights, markDirty]);
 
   const toggleFile = useCallback(
     (fileId: string) => {
@@ -1418,6 +1492,7 @@ export function DocsApp() {
               onAddHighlight={(hl) => addHighlight(hl, activeFile.id)}
               onUpdateHighlight={updateHighlight}
               onRemoveHighlight={removeHighlight}
+              onRepairHighlights={repairHighlights}
               onHome={goHome}
               onAskAi={askAiFromSelection}
               readingMode={readingMode}

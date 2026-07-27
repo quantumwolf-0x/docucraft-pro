@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isEditableTarget, hasModKey, modKeyLabel } from "@/lib/keyboard";
 import {
   ChevronRight,
   Settings,
@@ -207,6 +208,31 @@ export function Sidebar({
     .map((id) => activeFiles.find((f) => f.id === id))
     .filter((f): f is MdFile => !!f);
 
+  // Multi-select shortcuts. Read through a ref so the listener isn't torn down
+  // and rebuilt on every render just because `activeFiles` is a fresh array.
+  const activeFilesRef = useRef(activeFiles);
+  activeFilesRef.current = activeFiles;
+
+  useEffect(() => {
+    // Only while multi-select is on: outside it, Cmd/Ctrl+A must keep meaning
+    // "select all text on the page".
+    if (!selecting) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+      if (hasModKey(e) && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        setSelectedIds(new Set(activeFilesRef.current.map((f) => f.id)));
+        return;
+      }
+      if (e.key === "Escape") {
+        setSelecting(false);
+        setSelectedIds(new Set());
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selecting]);
+
   // Apply the sidebar view (sort → group). Manual reorder is only meaningful
   // against the real file order in a flat list, so it is disabled once a sort
   // is chosen or the list is grouped.
@@ -404,6 +430,8 @@ export function Sidebar({
                 }
               }}
               onCancel={() => { setSelecting(false); setSelectedIds(new Set()); }}
+              onSelectAll={() => setSelectedIds(new Set(activeFiles.map((f) => f.id)))}
+              allSelected={selectedIds.size >= activeFiles.length}
             />
           ) : null}
         </div>
@@ -563,11 +591,15 @@ function GroupActionMenu({
   onDownload,
   onDelete,
   onCancel,
+  onSelectAll,
+  allSelected,
 }: {
   onArchive?: () => void;
   onDownload?: () => void;
   onDelete: () => void;
   onCancel: () => void;
+  onSelectAll: () => void;
+  allSelected: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -599,7 +631,25 @@ function GroupActionMenu({
         <MoreVertical className="h-4 w-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-(--z-dropdown) mt-1 w-44 rounded-md border border-border bg-popover p-1 shadow-md">
+        <div className="absolute right-0 top-full z-(--z-dropdown) mt-1 w-52 rounded-md border border-border bg-popover p-1 shadow-md">
+          {/* Also bound to Cmd/Ctrl+A while multi-select is on; shown here so
+              the shortcut is discoverable rather than folklore. */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onSelectAll();
+            }}
+            disabled={allSelected}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            <CheckSquare className="h-3 w-3" />
+            Select All
+            <kbd className="ml-auto text-[10px] font-medium text-muted-foreground">
+              {modKeyLabel}A
+            </kbd>
+          </button>
+          <div className="my-1 h-px bg-border" />
           {onDownload && (
             <button
               onClick={(e) => {

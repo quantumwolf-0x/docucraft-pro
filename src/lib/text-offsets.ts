@@ -19,8 +19,10 @@ interface TextIndex {
   /** nodes[i] -> i, so a Selection's node resolves without scanning. */
   order: Map<Text, number>;
   total: number;
-  /** Full text content, built lazily (only firstTextRange needs it). */
+  /** Full text content, built lazily (only the text-search paths need it). */
   text: string | null;
+  /** Whitespace-collapsed copy of `text` + a map back into it, also lazy. */
+  compact: { text: string; map: number[] } | null;
 }
 
 // One content container is live at a time, so a single slot beats a WeakMap
@@ -43,7 +45,40 @@ function build(container: HTMLElement): TextIndex {
     nodes.push(t);
     acc += t.length;
   }
-  return { nodes, starts, order, total: acc, text: null };
+  return { nodes, starts, order, total: acc, text: null, compact: null };
+}
+
+/** The container's full text, cached with the index. */
+function fullText(idx: TextIndex): string {
+  if (idx.text == null) idx.text = idx.nodes.map((n) => n.data).join("");
+  return idx.text;
+}
+
+/** Collapse runs of whitespace to a single space. */
+const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** Whitespace-collapsed container text, with map[i] = index in the raw text. */
+function compactOf(idx: TextIndex): { text: string; map: number[] } {
+  if (idx.compact) return idx.compact;
+  const src = fullText(idx);
+  const chars: string[] = [];
+  const map: number[] = [];
+  let space = true; // leading whitespace is dropped
+  for (let i = 0; i < src.length; i++) {
+    if (/\s/.test(src[i])) {
+      if (!space) {
+        chars.push(" ");
+        map.push(i);
+        space = true;
+      }
+      continue;
+    }
+    chars.push(src[i]);
+    map.push(i);
+    space = false;
+  }
+  idx.compact = { text: chars.join(""), map };
+  return idx.compact;
 }
 
 function getIndex(container: HTMLElement): TextIndex {
@@ -169,8 +204,133 @@ export function firstTextRange(container: HTMLElement, text: string): Range | nu
   const idx = getIndex(container);
   // Cached with the index — legacy highlights would otherwise rebuild the
   // container's full text string once each, on every repaint.
-  if (idx.text == null) idx.text = idx.nodes.map((n) => n.data).join("");
-  const at = idx.text.toLowerCase().indexOf(needle.toLowerCase());
+  const at = fullText(idx).toLowerCase().indexOf(needle.toLowerCase());
   if (at === -1) return null;
   return buildRange(container, at, at + needle.length);
+}
+
+// ---- quote anchoring ----------------------------------------------------
+//
+// Stored offsets are only valid for the document as it was when the reader
+// highlighted it. Editing the markdown above a highlight shifts every offset
+// below it, which used to leave highlights painted over unrelated text. So a
+// highlight also records the text it covers and a little context on each side,
+// and is re-found by that quote whenever the offsets no longer hold.
+
+/** How much surrounding text is stored to disambiguate a repeated quote. */
+export const ANCHOR_CONTEXT = 48;
+
+export interface TextAnchor {
+  start: number;
+  end: number;
+}
+
+/** Rendered text on either side of a range — stored with a new highlight. */
+export function contextAround(
+  container: HTMLElement,
+  start: number,
+  end: number,
+): { prefix: string; suffix: string } {
+  const text = fullText(getIndex(container));
+  return {
+    prefix: text.slice(Math.max(0, start - ANCHOR_CONTEXT), start),
+    suffix: text.slice(end, end + ANCHOR_CONTEXT),
+  };
+}
+
+/** The container's rendered text between two offsets. */
+export function textBetween(container: HTMLElement, start: number, end: number): string {
+  return fullText(getIndex(container)).slice(start, end);
+}
+
+/** True when two pieces of rendered text are the same passage. */
+export const sameQuote = (a: string, b: string) =>
+  collapse(a).toLowerCase() === collapse(b).toLowerCase();
+
+function occurrences(hay: string, needle: string, cap = 400): number[] {
+  const out: number[] = [];
+  let i = hay.indexOf(needle);
+  while (i !== -1 && out.length < cap) {
+    out.push(i);
+    i = hay.indexOf(needle, i + 1);
+  }
+  return out;
+}
+
+/**
+ * Locate `quote` in the container's rendered text. When it appears more than
+ * once, the copy whose surroundings best match `prefix`/`suffix` wins, with the
+ * one nearest `hint` (the highlight's previous offset) breaking the tie — so a
+ * phrase repeated across a document re-anchors to the reader's own copy rather
+ * than the first one on the page.
+ *
+ * Returns null only when the text is genuinely gone: the highlight is orphaned,
+ * not silently moved somewhere else.
+ */
+export function findAnchor(
+  container: HTMLElement,
+  quote: string,
+  prefix = "",
+  suffix = "",
+  hint?: number,
+): TextAnchor | null {
+  const needle = quote.trim();
+  if (!needle) return null;
+  const idx = getIndex(container);
+  const raw = fullText(idx);
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+
+  const candidates = (n: string): TextAnchor[] => {
+    const direct = occurrences(lower, n.toLowerCase()).map((s) => ({
+      start: s,
+      end: s + n.length,
+    }));
+    if (direct.length) return direct;
+    // Re-rendering can change whitespace (a line rewrapped, a list reflowed)
+    // without changing a word; match on the collapsed text before giving up.
+    const c = compactOf(idx);
+    const cn = collapse(n);
+    if (!cn) return direct;
+    return occurrences(c.text.toLowerCase(), cn.toLowerCase()).map((s) => ({
+      start: c.map[s],
+      end: c.map[s + cn.length - 1] + 1,
+    }));
+  };
+
+  let hits = candidates(needle);
+  if (!hits.length) {
+    // The passage was partly edited. Anchor on the longest surviving prefix so
+    // the highlight shrinks to what still exists instead of disappearing.
+    for (let len = Math.floor(needle.length * 0.8); len >= 12; len = Math.floor(len * 0.8)) {
+      hits = candidates(needle.slice(0, len));
+      if (hits.length) break;
+    }
+  }
+  if (!hits.length) return null;
+  if (hits.length === 1) return hits[0];
+
+  const pre = prefix.toLowerCase();
+  const suf = suffix.toLowerCase();
+  let best = hits[0];
+  let bestScore = -1;
+  let bestDist = Infinity;
+  for (const hit of hits) {
+    let score = 0;
+    for (let k = 1; k <= pre.length && hit.start - k >= 0; k++) {
+      if (lower[hit.start - k] !== pre[pre.length - k]) break;
+      score++;
+    }
+    for (let k = 0; k < suf.length && hit.end + k < lower.length; k++) {
+      if (lower[hit.end + k] !== suf[k]) break;
+      score++;
+    }
+    const dist = hint == null ? 0 : Math.abs(hit.start - hint);
+    if (score > bestScore || (score === bestScore && dist < bestDist)) {
+      best = hit;
+      bestScore = score;
+      bestDist = dist;
+    }
+  }
+  return best;
 }
