@@ -1857,7 +1857,7 @@ export function DocsApp() {
               onClick={() => inputRef.current?.click()}
               className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              Upload files
+              Upload any file
             </button>
             {/* Nothing to right-click yet, so the sidebar's New menu is out of
                 reach — a blank document has to be startable from here too. */}

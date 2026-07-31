@@ -36,10 +36,10 @@ interface Props {
   fileId: string;
   /** Debounced autosave, and the target of the Cmd/Ctrl+S shortcut. */
   onSave: (content: string) => void;
-  /** Leave the editor, keeping the current draft. */
-  onDone: () => void;
-  /** Leave the editor, restoring `initialContent`. */
-  onCancel: () => void;
+  /** Leave the editor, keeping the current draft. Passes back the cursor's source index. */
+  onDone: (cursorIndex?: number) => void;
+  /** Leave the editor, restoring `initialContent`. Passes back the cursor's source index. */
+  onCancel: (cursorIndex?: number) => void;
   /** Shown when "Inspect in source" couldn't pin the text to a source span. */
   inspectMissed?: boolean;
 }
@@ -122,7 +122,7 @@ function MarkdownEditorImpl(
     // component, or the cleanup above would re-save the discarded draft.
     cancelledRef.current = true;
     setDraft(initialContent);
-    onCancel();
+    onCancel(textareaRef.current?.selectionStart);
   }, [initialContent, onCancel]);
 
   return (
@@ -142,7 +142,7 @@ function MarkdownEditorImpl(
             Cancel
           </button>
           <button
-            onClick={onDone}
+            onClick={() => onDone(textareaRef.current?.selectionStart)}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95"
           >
             <Eye className="h-3.5 w-3.5" /> Done · Preview

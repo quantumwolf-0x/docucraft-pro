@@ -39,6 +39,7 @@ import {
   MoreHorizontal,
   Presentation,
   Crosshair,
+  Download,
 } from "lucide-react";
 import { Spotlight } from "./PresentationMode";
 import type { MdFile } from "@/lib/markdown-utils";
@@ -238,15 +239,99 @@ function MarkdownViewerImpl({
     (content: string) => onContentChange(file.id, content),
     [onContentChange, file.id],
   );
-  const leaveEditMode = useCallback(() => setEditMode(false), []);
-  const cancelEdit = useCallback(() => {
+  const leaveEditMode = useCallback((cursorIndex?: number) => {
+    setEditMode(false);
+    if (cursorIndex !== undefined) {
+      const chunks = fileSubtopics(file);
+      if (chunks.length > 0) {
+        let currentLength = 0;
+        let targetChunk = chunks[0];
+        for (const chunk of chunks) {
+          if (cursorIndex >= currentLength && cursorIndex <= currentLength + chunk.content.length) {
+            targetChunk = chunk;
+            break;
+          }
+          currentLength += chunk.content.length + 1;
+        }
+        if (singleMode) {
+          setTimeout(() => {
+            const el = document.getElementById(targetChunk.id);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 100);
+        } else {
+          onNav(file.id, targetChunk.id);
+        }
+      }
+    }
+  }, [file, singleMode, onNav]);
+  const cancelEdit = useCallback((cursorIndex?: number) => {
     onContentChange(file.id, originalContentRef.current);
     setEditMode(false);
-  }, [onContentChange, file.id]);
+    if (cursorIndex !== undefined) {
+      const chunks = fileSubtopics(file);
+      if (chunks.length > 0) {
+        let currentLength = 0;
+        let targetChunk = chunks[0];
+        for (const chunk of chunks) {
+          if (cursorIndex >= currentLength && cursorIndex <= currentLength + chunk.content.length) {
+            targetChunk = chunk;
+            break;
+          }
+          currentLength += chunk.content.length + 1;
+        }
+        if (singleMode) {
+          setTimeout(() => {
+            const el = document.getElementById(targetChunk.id);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 100);
+        } else {
+          onNav(file.id, targetChunk.id);
+        }
+      }
+    }
+  }, [onContentChange, file.id, file, singleMode, onNav]);
   const enterEditMode = useCallback(() => {
     originalContentRef.current = file.content;
     setEditMode(true);
   }, [file.content]);
+
+  const exportPDF = useCallback(() => {
+    window.print();
+  }, []);
+
+  const exportHTML = useCallback(() => {
+    if (!containerRef.current) return;
+    const html = containerRef.current.innerHTML;
+    const blob = new Blob(
+      [
+        `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>${file.name}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.6; }
+      mark { background-color: rgba(250, 204, 21, 0.4); color: inherit; }
+      img { max-width: 100%; height: auto; }
+      pre { background: #f4f4f5; padding: 1rem; overflow-x: auto; border-radius: 0.5rem; }
+      code { font-family: monospace; }
+      .docs-prose { max-width: 100%; }
+    </style>
+  </head>
+  <body>
+    ${html}
+  </body>
+</html>`
+      ],
+      { type: "text/html" }
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name.replace(/\.md$/, "") + ".html";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [file.name]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -1023,6 +1108,26 @@ function MarkdownViewerImpl({
                     <Pencil className="h-4 w-4" />
                   </button>
                 )}
+                {!editMode && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        title="Export document"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      >
+                        <Download className="h-4 w-4" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={exportPDF}>
+                        Export as PDF
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={exportHTML}>
+                        Export as HTML
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
 
               <div className="flex md:hidden items-center">
@@ -1059,6 +1164,18 @@ function MarkdownViewerImpl({
                       <DropdownMenuItem onClick={enterEditMode}>
                         <Pencil className="mr-2 h-4 w-4" />
                         Edit document
+                      </DropdownMenuItem>
+                    )}
+                    {!editMode && (
+                      <DropdownMenuItem onClick={exportPDF}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Export as PDF
+                      </DropdownMenuItem>
+                    )}
+                    {!editMode && (
+                      <DropdownMenuItem onClick={exportHTML}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Export as HTML
                       </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>
