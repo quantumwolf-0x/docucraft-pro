@@ -5,17 +5,15 @@ import {
   PlusCircle,
   Download,
   Upload,
-  Trash2,
   Check,
   FolderOpen,
   Users,
-  Layers,
+  Settings,
 } from "lucide-react";
 
 interface WorkspaceLite {
   id: string;
   name: string;
-  docCount?: number;
 }
 
 interface Props {
@@ -27,10 +25,10 @@ interface Props {
   onImport: (file: File) => void;
   onExport: () => void;
   onShare: () => void;
-  /** "pill" = compact header trigger; "sidebar" = full-width logo + name + doc count. */
+  /** "pill" = compact header trigger; "sidebar" = full-width name. */
   variant?: "pill" | "sidebar";
-  /** Number of docs in the current workspace — shown by the sidebar variant. */
-  docCount?: number;
+  /** Callback to open settings (typically rendered in sidebar) */
+  onSettings?: () => void;
 }
 
 export function WorkspaceMenu({
@@ -42,8 +40,8 @@ export function WorkspaceMenu({
   onImport,
   onExport,
   onShare,
+  onSettings,
   variant = "pill",
-  docCount = 0,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -58,7 +56,7 @@ export function WorkspaceMenu({
   // outside the normal flow, we position it manually from the trigger's rect
   // and keep it pinned as the page scrolls or resizes.
   const MENU_W = 280;
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -68,7 +66,14 @@ export function WorkspaceMenu({
       const r = el.getBoundingClientRect();
       const desired = sidebar ? r.left : r.right - MENU_W; // sidebar left-aligns, pill right-aligns
       const left = Math.min(Math.max(8, desired), window.innerWidth - MENU_W - 8);
-      setPos({ top: r.bottom + 6, left });
+
+      if (sidebar) {
+        // Pop upwards in the sidebar since it's at the bottom
+        const bottom = window.innerHeight - r.top + 6;
+        setPos({ bottom, left });
+      } else {
+        setPos({ top: r.bottom + 6, left });
+      }
     };
     place();
     window.addEventListener("scroll", place, true);
@@ -119,15 +124,12 @@ export function WorkspaceMenu({
       {sidebar ? (
         <button
           onClick={() => setOpen((o) => !o)}
-          className="flex w-full items-center rounded-lg px-2 py-1.5 text-left bg-background transition-colors hover:bg-accent"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
           title="Workspaces"
         >
-          <span className="min-w-0">
-            <span className="flex min-w-0 items-center gap-1">
-              <span className="truncate text-sm font-semibold text-foreground">Localdox</span>
-              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground opacity-70" />
-            </span>
-          </span>
+          <FolderOpen className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{current?.name ?? "Localdox"}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-70" />
         </button>
       ) : (
         <button
@@ -147,29 +149,25 @@ export function WorkspaceMenu({
         createPortal(
           <div
             ref={menuRef}
-            style={{ position: "fixed", top: pos.top, left: pos.left, width: MENU_W }}
+            style={{
+              position: "fixed",
+              top: pos.top,
+              bottom: pos.bottom,
+              left: pos.left,
+              width: MENU_W,
+            }}
             className="z-(--z-dropdown) overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
           >
             <div className="max-h-[70vh] overflow-y-auto p-2">
               {current && (
-                <div className="group relative mb-2 flex items-center justify-between rounded-xl bg-accent p-2 transition-colors hover:bg-accent/80">
+                <div className="group relative mb-1 flex items-center justify-between rounded-xl bg-accent px-3 py-2 transition-colors hover:bg-accent/80">
                   <button
                     onClick={() => setOpen(false)}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    className="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground"
                   >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background">
-                      <Layers className="h-4 w-4 text-foreground" strokeWidth={1.5} />
-                    </div>
-                    <div className="flex flex-col items-start min-w-0">
-                      <span className="truncate text-sm font-medium text-foreground">
-                        {current.name}
-                      </span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {current.docCount ?? 0} docs
-                      </span>
-                    </div>
+                    {current.name}
                   </button>
-                  <Check className="mr-2 h-4 w-4 shrink-0 text-foreground" />
+                  <Check className="ml-2 h-4 w-4 shrink-0 text-foreground" />
                 </div>
               )}
 
@@ -178,35 +176,34 @@ export function WorkspaceMenu({
                   {workspaces
                     .filter((w) => w.id !== currentId)
                     .map((w) => (
-                      <div
+                      <button
                         key={w.id}
-                        className="group relative flex items-center rounded-xl p-2 transition-colors hover:bg-accent"
+                        onClick={() => {
+                          onSwitch(w.id);
+                          setOpen(false);
+                        }}
+                        className="truncate rounded-xl px-3 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent"
                       >
-                        <button
-                          onClick={() => {
-                            onSwitch(w.id);
-                            setOpen(false);
-                          }}
-                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                        >
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl">
-                            <FolderOpen
-                              className="h-4 w-4 text-muted-foreground"
-                              strokeWidth={1.5}
-                            />
-                          </div>
-                          <div className="flex flex-col items-start min-w-0">
-                            <span className="truncate text-sm font-medium text-foreground">
-                              {w.name}
-                            </span>
-                            <span className="truncate text-xs text-muted-foreground">
-                              {w.docCount ?? 0} docs
-                            </span>
-                          </div>
-                        </button>
-                      </div>
+                        {w.name}
+                      </button>
                     ))}
                 </div>
+              )}
+
+              {/* Creating a workspace is the same kind of act as switching to
+                  one, so it sits in the list rather than only in the footer
+                  strip, where it read as a tool rather than a destination. */}
+              {!creating && (
+                <button
+                  onClick={() => {
+                    setCreating(true);
+                    setNewName("");
+                  }}
+                  className="mt-0.5 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <PlusCircle className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                  New workspace
+                </button>
               )}
             </div>
 
@@ -240,19 +237,9 @@ export function WorkspaceMenu({
               </div>
             )}
 
+            {/* New workspace lives in the list above, beside the workspaces it
+                would join; this strip is for what you do *to* a workspace. */}
             <div className="flex border-t border-border bg-muted/50">
-              {!creating && (
-                <>
-                  <ActionButton
-                    icon={PlusCircle}
-                    label="New"
-                    onClick={() => {
-                      setCreating(true);
-                      setNewName("");
-                    }}
-                  />
-                </>
-              )}
               <ActionButton icon={Upload} label="Import" onClick={() => fileRef.current?.click()} />
               <ActionButton
                 icon={Download}
@@ -270,6 +257,16 @@ export function WorkspaceMenu({
                   setOpen(false);
                 }}
               />
+              {onSettings && (
+                <ActionButton
+                  icon={Settings}
+                  label="Settings"
+                  onClick={() => {
+                    onSettings();
+                    setOpen(false);
+                  }}
+                />
+              )}
             </div>
           </div>,
           document.body,

@@ -30,6 +30,7 @@ import {
   FilePlus,
   Archive,
   Download,
+  Upload,
   CheckSquare,
   Share2,
   Hash,
@@ -118,6 +119,14 @@ export const DEFAULT_VIEW: SidebarView = {
   sort: "manual",
   dir: "asc",
   mode: "all",
+};
+
+/** The list's three views, in the order the picker offers them. */
+const VIEW_MODES: readonly SidebarView["mode"][] = ["all", "grouped", "saved"];
+const VIEW_LABEL: Record<SidebarView["mode"], string> = {
+  all: "All files",
+  grouped: "Grouped",
+  saved: "Saved",
 };
 
 /** A sidebar folder, as far as the sidebar is concerned. */
@@ -298,6 +307,32 @@ function SidebarImpl({
     if (name && name.trim()) onCreateFolder?.(name.trim());
   };
 
+  // "Create" opens a small File/Folder menu; "view" picks what the list below
+  // shows. Both are click-away dropdowns anchored to their own button.
+  const [creatingOpen, setCreatingOpen] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const createRef = useRef<HTMLDivElement>(null);
+  const viewMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!creatingOpen && !viewMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!createRef.current?.contains(t)) setCreatingOpen(false);
+      if (!viewMenuRef.current?.contains(t)) setViewMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setCreatingOpen(false);
+      setViewMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [creatingOpen, viewMenuOpen]);
 
   const total = files.length;
 
@@ -493,10 +528,16 @@ function SidebarImpl({
             <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
           )}
           {selecting && (
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center pl-1" onClick={(e) => { e.stopPropagation(); toggleSelection(file.id); }}>
-              <input 
-                type="checkbox" 
-                checked={selectedIds.has(file.id)} 
+            <div
+              className="flex h-6 w-6 shrink-0 items-center justify-center pl-1"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleSelection(file.id);
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selectedIds.has(file.id)}
                 onChange={() => toggleSelection(file.id)}
                 className="h-4 w-4 rounded border-border text-primary focus:ring-primary cursor-pointer"
               />
@@ -571,21 +612,39 @@ function SidebarImpl({
                     }
                   : undefined
               }
-              onArchive={onArchiveFile ? () => {
-                selectedIds.forEach((id) => onArchiveFile(id));
-                setSelecting(false); setSelectedIds(new Set());
-              } : undefined}
-              onDownload={onDownloadFile ? () => {
-                selectedIds.forEach((id) => onDownloadFile(id));
-                setSelecting(false); setSelectedIds(new Set());
-              } : undefined}
+              onArchive={
+                onArchiveFile
+                  ? () => {
+                      selectedIds.forEach((id) => onArchiveFile(id));
+                      setSelecting(false);
+                      setSelectedIds(new Set());
+                    }
+                  : undefined
+              }
+              onDownload={
+                onDownloadFile
+                  ? () => {
+                      selectedIds.forEach((id) => onDownloadFile(id));
+                      setSelecting(false);
+                      setSelectedIds(new Set());
+                    }
+                  : undefined
+              }
               onDelete={() => {
-                if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected files?`)) {
+                if (
+                  window.confirm(
+                    `Are you sure you want to delete ${selectedIds.size} selected files?`,
+                  )
+                ) {
                   selectedIds.forEach((id) => onRemoveFile(id));
-                  setSelecting(false); setSelectedIds(new Set());
+                  setSelecting(false);
+                  setSelectedIds(new Set());
                 }
               }}
-              onCancel={() => { setSelecting(false); setSelectedIds(new Set()); }}
+              onCancel={() => {
+                setSelecting(false);
+                setSelectedIds(new Set());
+              }}
               onSelectAll={() => setSelectedIds(new Set(activeFiles.map((f) => f.id)))}
               allSelected={selectedIds.size >= activeFiles.length}
             />
@@ -599,10 +658,9 @@ function SidebarImpl({
     <aside className="flex h-full flex-col">
       {docked ? (
         <>
-          {/* Workspace picker replaces the removed app header: Localdox logo,
-              workspace name, and doc count, opening the workspace menu. */}
-          {(onSwitchWorkspace || onOpenPalette) && (
-            <div className="flex items-center gap-1 px-3 pt-3">
+          {/* Default header: Title + Search */}
+          {(onToggleSidebar || onOpenPalette) && (
+            <div className="flex items-center justify-between gap-2 px-3 pt-3">
               {onToggleSidebar && (
                 <button
                   onClick={onToggleSidebar}
@@ -612,20 +670,6 @@ function SidebarImpl({
                 >
                   <PanelLeft className="h-4 w-4" />
                 </button>
-              )}
-              {onSwitchWorkspace && (
-                <WorkspaceMenu
-                  variant="sidebar"
-                  docCount={total}
-                  workspaces={workspaces}
-                  currentId={currentWorkspaceId ?? null}
-                  onSwitch={onSwitchWorkspace}
-                  onNew={(name) => onNewWorkspace?.(name)}
-                  onDelete={(id) => onDeleteWorkspace?.(id)}
-                  onImport={(file) => onImportWorkspace?.(file)}
-                  onExport={() => onExportWorkspace?.()}
-                  onShare={() => onShareWorkspace?.()}
-                />
               )}
               {onOpenPalette && (
                 <button
@@ -640,28 +684,112 @@ function SidebarImpl({
             </div>
           )}
         </>
-      ) : (
-        // Ask AI is the mobile-drawer hero action, pinned Arc-style at the top.
-        onAskAi && (
-          <div className="p-3 pb-0">
-            <button
-              onClick={onAskAi}
-              className="group flex w-full items-center gap-2 rounded-xl border border-primary/20 bg-primary/10 px-3 py-2.5 text-sm font-semibold text-primary transition-colors hover:border-primary/40 hover:bg-primary/15"
-            >
-              <Sparkles className="h-4 w-4 shrink-0 transition-transform group-hover:scale-110" />
-              <span className="flex-1 text-left">Ask AI</span>
-              <ChevronRight className="h-4 w-4 shrink-0 opacity-40 transition-transform group-hover:translate-x-0.5" />
-            </button>
-          </div>
-        )
-      )}
+      ) : null}
 
-      {/* Chip row: switches the file list between All / Grouped / Saved. */}
-      <div className="mt-3 flex w-full min-w-0 items-center justify-between gap-2 border-b border-border p-3 pt-0">
-        <SidebarChips view={view} onView={onView} />
+      {/* The two ways to grow the workspace, side by side in what used to be
+          the chip row: bringing in documents you already have, and starting an
+          empty one here. Which view the list shows moved to the list header
+          below, where it sits next to the thing it filters. */}
+      <div className="mt-3 border-b border-border p-3 pt-0">
+        <div className="flex w-full min-w-0 items-stretch gap-2">
+          {(onCreateFile || onCreateFolder) && (
+            <div ref={createRef} className="relative min-w-0 flex-1">
+              <button
+                onClick={() => setCreatingOpen((o) => !o)}
+                aria-expanded={creatingOpen}
+                className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Plus className="h-4 w-4 shrink-0" />
+                <span className="truncate">Create</span>
+              </button>
+
+              {creatingOpen && (
+                <div className="absolute left-0 top-full z-(--z-dropdown) mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-md">
+                  {onCreateFile && (
+                    <button
+                      onClick={() => {
+                        setCreatingOpen(false);
+                        // A file created from here belongs to the workspace
+                        // root; the per-folder menus create inside a folder.
+                        onCreateFile(null);
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+                    >
+                      <FilePlus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      File
+                    </button>
+                  )}
+                  {onCreateFolder && (
+                    <button
+                      onClick={() => {
+                        setCreatingOpen(false);
+                        promptNewFolder();
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+                    >
+                      <FolderPlus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      Folder
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={onAddFiles}
+            className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Upload className="h-4 w-4 shrink-0" />
+            <span className="truncate">Upload</span>
+          </button>
+        </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-3">
+      {/* What the list shows. This was a row of All / Grouped / Saved chips;
+          as a labelled dropdown it says which view is active in words and
+          gives the two buttons above it the full width of the sidebar. */}
+      {onView && (
+        <div ref={viewMenuRef} className="relative px-3 pb-1 pt-3">
+          <button
+            onClick={() => setViewMenuOpen((o) => !o)}
+            aria-expanded={viewMenuOpen}
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <span className="truncate">{VIEW_LABEL[view.mode]}</span>
+            <ChevronRight
+              className={`h-3.5 w-3.5 shrink-0 opacity-60 transition-transform ${
+                viewMenuOpen ? "rotate-90" : ""
+              }`}
+            />
+          </button>
+
+          {viewMenuOpen && (
+            <div className="absolute left-3 top-full z-(--z-dropdown) mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-md">
+              {VIEW_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => {
+                    onView({ ...view, mode });
+                    setViewMenuOpen(false);
+                  }}
+                  aria-pressed={view.mode === mode}
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent ${
+                    view.mode === mode ? "text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  <Check
+                    className={`h-3.5 w-3.5 shrink-0 ${view.mode === mode ? "" : "opacity-0"}`}
+                  />
+                  {VIEW_LABEL[mode]}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <nav className="flex-1 overflow-y-auto px-3 pb-3">
         {reordering && !viewActive && (
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-2 text-xs text-primary">
             <GripVertical className="h-3.5 w-3.5 shrink-0" />
@@ -831,22 +959,21 @@ function SidebarImpl({
         )}
       </nav>
 
-      <div className="flex gap-2 border-t border-border p-3">
-        <button
-          onClick={onAddFiles}
-          className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Add more files</span>
-        </button>
-        <button
-          onClick={onOpenSettings}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          aria-label="Settings"
-          title="Settings"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
+      <div className="flex flex-col gap-1 border-t border-sidebar-border p-2">
+        {onSwitchWorkspace && (
+          <WorkspaceMenu
+            variant="sidebar"
+            workspaces={workspaces}
+            currentId={currentWorkspaceId ?? null}
+            onSwitch={onSwitchWorkspace}
+            onNew={(name) => onNewWorkspace?.(name)}
+            onDelete={(id) => onDeleteWorkspace?.(id)}
+            onImport={(file) => onImportWorkspace?.(file)}
+            onExport={() => onExportWorkspace?.()}
+            onShare={() => onShareWorkspace?.()}
+            onSettings={onOpenSettings}
+          />
+        )}
       </div>
     </aside>
   );
@@ -1341,45 +1468,6 @@ function FolderMenu({
           {onDelete && item("Delete folder", Trash2, onDelete, true)}
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * The chip row that replaces the workspace name: switches the file list
- * between All (flat), Grouped (by file type),
- * and Saved (bookmarks). Shared by the desktop header and the mobile chip row.
- */
-function SidebarChips({
-  view = DEFAULT_VIEW,
-  onView,
-}: {
-  view?: SidebarView;
-  onView?: (view: SidebarView) => void;
-}) {
-  const chips = [
-    ["all", "All"],
-    ["grouped", "Grouped"],
-    ["saved", "Saved"],
-  ] as const;
-
-  return (
-    <div className="flex w-full min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none [&::-webkit-scrollbar]:hidden">
-      {chips.map(([key, label]) => (
-        <button
-          key={key}
-          type="button"
-          onClick={() => onView?.({ ...view, mode: key })}
-          aria-pressed={view.mode === key}
-          className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-            view.mode === key
-              ? "border-primary/50 bg-transparent text-primary"
-              : "border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
-          }`}
-        >
-          {label}
-        </button>
-      ))}
     </div>
   );
 }

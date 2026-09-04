@@ -1,23 +1,10 @@
 import { useState } from "react";
-import {
-  FolderOpen,
-  Plus,
-  Upload,
-  Download,
-  Share,
-  CheckCircle2,
-  Trash2,
-  Layers,
-  Check,
-  PlusCircle,
-  Users,
-} from "lucide-react";
+import { FolderOpen, Upload, Download, Check, PlusCircle, Users } from "lucide-react";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 
 interface WorkspaceLite {
   id: string;
   name: string;
-  docCount?: number;
 }
 
 interface Props {
@@ -91,27 +78,17 @@ export function WorkspaceSheet({
             return (
               <>
                 {current && (
-                  <div className="group relative mb-2 flex items-center justify-between rounded-xl bg-accent p-2 transition-colors hover:bg-accent/80">
+                  <div className="group relative mb-1 flex items-center justify-between rounded-xl bg-accent px-3 py-2.5 transition-colors hover:bg-accent/80">
                     <button
                       onClick={() => {
                         setOpen(false);
                         onSwitch(current.id);
                       }}
-                      className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none"
+                      className="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground focus-visible:outline-none"
                     >
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background">
-                        <Layers className="h-4 w-4 text-foreground" strokeWidth={1.5} />
-                      </div>
-                      <div className="flex flex-col items-start min-w-0">
-                        <span className="truncate text-sm font-medium text-foreground">
-                          {current.name}
-                        </span>
-                        <span className="truncate text-xs text-muted-foreground">
-                          {current.docCount ?? 0} docs
-                        </span>
-                      </div>
+                      {current.name}
                     </button>
-                    <Check className="mr-2 h-4 w-4 shrink-0 text-foreground" />
+                    <Check className="ml-2 h-4 w-4 shrink-0 text-foreground" />
                   </div>
                 )}
 
@@ -120,35 +97,33 @@ export function WorkspaceSheet({
                     {workspaces
                       .filter((w) => w.id !== currentId)
                       .map((w) => (
-                        <div
+                        <button
                           key={w.id}
-                          className="group relative flex items-center rounded-xl p-2 transition-colors hover:bg-accent"
+                          onClick={() => {
+                            onSwitch(w.id);
+                            setOpen(false);
+                          }}
+                          className="truncate rounded-xl px-3 py-2.5 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none"
                         >
-                          <button
-                            onClick={() => {
-                              onSwitch(w.id);
-                              setOpen(false);
-                            }}
-                            className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none"
-                          >
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl">
-                              <FolderOpen
-                                className="h-4 w-4 text-muted-foreground"
-                                strokeWidth={1.5}
-                              />
-                            </div>
-                            <div className="flex flex-col items-start min-w-0">
-                              <span className="truncate text-sm font-medium text-foreground">
-                                {w.name}
-                              </span>
-                              <span className="truncate text-xs text-muted-foreground">
-                                {w.docCount ?? 0} docs
-                              </span>
-                            </div>
-                          </button>
-                        </div>
+                          {w.name}
+                        </button>
                       ))}
                   </div>
+                )}
+
+                {/* Creating a workspace belongs beside the workspaces it would
+                    join, not only in the action strip below. */}
+                {!isCreating && (
+                  <button
+                    onClick={() => {
+                      setIsCreating(true);
+                      setNewName("");
+                    }}
+                    className="mt-0.5 flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none"
+                  >
+                    <PlusCircle className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                    New workspace
+                  </button>
                 )}
               </>
             );
@@ -185,19 +160,9 @@ export function WorkspaceSheet({
             </div>
           )}
 
+          {/* New workspace lives in the list above; this strip is for what you
+              do *to* a workspace. */}
           <div className="flex border-t border-border bg-muted/50 mt-4 rounded-xl overflow-hidden">
-            {!isCreating && (
-              <>
-                <ActionButton
-                  icon={PlusCircle}
-                  label="New"
-                  onClick={() => {
-                    setIsCreating(true);
-                    setNewName("");
-                  }}
-                />
-              </>
-            )}
             <ActionButton
               icon={Upload}
               label="Import"
