@@ -1,4 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { useHideOnScroll } from "@/hooks/use-hide-on-scroll";
 
 /**
  * The one header every viewer shares. Layout is fixed for all file types:
@@ -30,8 +32,19 @@ export function ViewerHeader({
   center: React.ReactNode;
   actions?: React.ReactNode;
 }) {
+  // Phones give up a seventh of the screen to this bar. It slides away while
+  // the reader is heading down the document and comes straight back on the
+  // first upward scroll, so the controls are always one gesture away without
+  // being permanently in the way. Desktop has the room; it keeps the header
+  // pinned.
+  const isMobile = useIsMobile();
+  const headerRef = useHideOnScroll<HTMLDivElement>(isMobile);
+
   return (
-    <div className="app-surface sticky top-0 z-(--z-sticky) flex h-14 shrink-0 items-center gap-2 border-b border-border/50 px-4 md:px-7">
+    <div
+      ref={headerRef}
+      className="app-surface sticky top-0 z-(--z-sticky) flex h-14 shrink-0 items-center gap-2 border-b border-border/50 px-4 transition-transform duration-300 ease-out will-change-transform md:px-7"
+    >
       <div className="flex shrink-0 items-center gap-1">
         <HeaderNavButton
           onClick={nav.onPrev}
