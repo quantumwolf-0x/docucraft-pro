@@ -1075,16 +1075,7 @@ function MarkdownViewerImpl({
                 >
                   <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
                 </button>
-                {!editMode && onShareFile && (
-                  <button
-                    onClick={onShareFile}
-                    title="Copy a share link to this file"
-                    aria-label="Share this file"
-                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <Share className="h-4 w-4" />
-                  </button>
-                )}
+
                 {!editMode && onToggleReadingMode && (
                   <button
                     onClick={onToggleReadingMode}
@@ -1115,26 +1106,6 @@ function MarkdownViewerImpl({
                   >
                     <Pencil className="h-4 w-4" />
                   </button>
-                )}
-                {!editMode && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        title="Export document"
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                      >
-                        <Download className="h-4 w-4" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={exportPDF}>
-                        Export as PDF
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={exportHTML}>
-                        Export as HTML
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 )}
               </div>
 
@@ -1172,18 +1143,6 @@ function MarkdownViewerImpl({
                       <DropdownMenuItem onClick={enterEditMode}>
                         <Pencil className="mr-2 h-4 w-4" />
                         Edit document
-                      </DropdownMenuItem>
-                    )}
-                    {!editMode && (
-                      <DropdownMenuItem onClick={exportPDF}>
-                        <Download className="mr-2 h-4 w-4" />
-                        Export as PDF
-                      </DropdownMenuItem>
-                    )}
-                    {!editMode && (
-                      <DropdownMenuItem onClick={exportHTML}>
-                        <Download className="mr-2 h-4 w-4" />
-                        Export as HTML
                       </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>
