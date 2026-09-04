@@ -252,7 +252,7 @@ function Stage({
   return (
     <div className="group/stage relative flex h-full w-full flex-col">
       <div
-        className={`absolute top-2 z-10 flex items-center gap-1 transition-opacity ${
+        className={`mermaid-controls absolute top-2 z-10 flex items-center gap-1 transition-opacity ${
           // In fullscreen the fixed Close owns the top-right corner, so keep the
           // zoom controls on the left to avoid overlap.
           fill ? "left-2 opacity-100" : "right-2 opacity-0 group-hover/stage:opacity-100"

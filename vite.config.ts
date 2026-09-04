@@ -34,6 +34,7 @@ export default defineConfig({
     // dependency tree — cytoscape, dagre, d3 — into the dev-server warm-up and
     // encouraged it back into the initial graph.
     exclude: ["mermaid", "@babel/standalone", "xlsx", "mammoth"],
+    include: ["dayjs", "@braintree/sanitize-url"],
   },
   build: {
     // Terser-grade minification is worth the build time here: the app ships a

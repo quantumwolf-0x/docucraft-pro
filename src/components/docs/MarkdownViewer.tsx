@@ -920,11 +920,19 @@ function MarkdownViewerImpl({
           <Callout {...p} />
         </SavableBlock>
       ),
-      pre: (p: any) => (
-        <SavableBlock blockType="code" className="docs-savable-code">
-          <CodeBlock {...p} />
-        </SavableBlock>
-      ),
+      pre: (p: any) => {
+        const codeEl = Array.isArray(p.children) ? p.children[0] : p.children;
+        const cls = codeEl?.props?.className ?? "";
+        const isMermaid = typeof cls === "string" && /language-mermaid/.test(cls);
+        return (
+          <SavableBlock
+            blockType="code"
+            className={isMermaid ? "docs-savable-mermaid" : "docs-savable-code"}
+          >
+            <CodeBlock {...p} />
+          </SavableBlock>
+        );
+      },
       img: (p: any) => {
         if (isArtifactUrl(p.src)) {
           return (

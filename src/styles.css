@@ -972,10 +972,9 @@
   color: var(--foreground);
 }
 
-/* Mermaid diagrams render responsively inside the pan/zoom stage */
+/* Mermaid diagrams render at their natural readable size inside the pan/zoom stage */
 .docs-mermaid svg {
-  max-width: 100%;
-  height: auto;
+  max-width: none !important;
   display: block;
 }
 
@@ -1068,8 +1067,47 @@
   top: 0.875rem;
   right: 5.5rem;
 }
+/* Mermaid diagrams have zoom controls. Put the star next to them. */
+.docs-savable-mermaid > .docs-save-star {
+  top: 0.5rem;
+  right: 8.5rem;
+  z-index: 20;
+  border-color: color-mix(in oklab, var(--border) 60%, transparent);
+  background-color: color-mix(in oklab, var(--background) 90%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.docs-savable-mermaid > .docs-save-star:active {
+  transform: scale(0.95);
+}
+.docs-savable-mermaid:hover .mermaid-controls {
+  opacity: 1 !important;
+}
+/* On a diagram the star is one of a row of overlay controls (zoom, download,
+   fullscreen) that sit *on top of* the picture. Keeping it pinned there once
+   saved — the behaviour every other block wants — leaves a button parked over
+   the diagram while it is being read. It reveals and hides with the zoom
+   controls instead; saved state is still legible the moment the row appears. */
+.docs-savable-mermaid > .docs-save-star,
+.docs-savable-mermaid > .docs-save-star[data-saved="true"] {
+  opacity: 0;
+}
+.docs-savable-mermaid:hover > .docs-save-star,
+.docs-savable-mermaid > .docs-save-star:focus-visible {
+  opacity: 1;
+}
 @media (max-width: 768px) {
   .docs-save-star {
+    opacity: 1;
+  }
+  /* Diagrams keep the tap-to-reveal behaviour their zoom controls already have,
+     so the overlay row does not sit permanently over the picture. */
+  .docs-savable-mermaid > .docs-save-star,
+  .docs-savable-mermaid > .docs-save-star[data-saved="true"] {
+    opacity: 0;
+  }
+  .docs-savable-mermaid:hover > .docs-save-star,
+  .docs-savable-mermaid:focus-within > .docs-save-star {
     opacity: 1;
   }
 }
