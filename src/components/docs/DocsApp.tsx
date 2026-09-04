@@ -1,24 +1,12 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import {
-  BookOpen,
-  Menu,
-  X,
-  Search,
-  Plus,
-  Monitor,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Undo2,
-  Home,
-  Upload,
-  Settings,
-} from "lucide-react";
+import { Menu, X, Search, Plus, Undo2, Upload, Settings } from "lucide-react";
 
 import { Sidebar, DEFAULT_VIEW, type SidebarView } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { WorkspaceSheet } from "./WorkspaceSheet";
+import { BrandMark } from "./BrandMark";
 import type { AskAiPrefill } from "./ai/AskAiPanel";
 
 // Code-split surfaces. None of these is on the path to reading a document — the
@@ -1948,13 +1936,15 @@ export function DocsApp() {
   }, [navigate, newWorkspace]);
 
   const dragOverlay = globalDrag ? (
-    <div className="fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-background/80 backdrop-blur-sm border-4 border-dashed border-primary transition-all duration-300">
-      <div className="rounded-3xl bg-card p-10 shadow-2xl flex flex-col items-center gap-6 animate-in fade-in zoom-in duration-300">
-        <Upload className="h-16 w-16 text-primary animate-bounce" />
+    <div className="fixed inset-0 z-(--z-overlay) flex items-center justify-center bg-background/70 backdrop-blur-md">
+      <div className="flex flex-col items-center gap-5 rounded-[28px] border border-border bg-card px-12 py-10 shadow-[0_24px_80px_color-mix(in_oklab,var(--foreground)_12%,transparent)]">
+        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-foreground text-background">
+          <Upload className="h-6 w-6" />
+        </span>
         <div className="text-center">
-          <h2 className="text-3xl font-bold text-foreground">Drop files to upload</h2>
-          <p className="mt-2 text-base text-muted-foreground">
-            Documents, spreadsheets, PDFs, and presentations are ready to preview.
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">Drop to add</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Documents, spreadsheets, PDFs, and presentations.
           </p>
         </div>
       </div>
@@ -1993,12 +1983,21 @@ export function DocsApp() {
   ) : null;
 
   if (booting) {
-    return <div className="min-h-dvh bg-background" />;
+    return (
+      <div className="flex min-h-dvh items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <BrandMark className="h-9 w-9 rounded-[11px] text-sm" />
+          <div className="h-1 w-24 overflow-hidden rounded-full bg-muted">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-foreground/40" />
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (files.length === 0 && !showSettings) {
     return (
-      <div className="min-h-dvh bg-background">
+      <div className="min-h-dvh">
         <Header
           theme={theme}
           onCycleTheme={cycleTheme}
@@ -2020,28 +2019,30 @@ export function DocsApp() {
           onOpenSettings={openSettings}
         />
         {commandPalette}
-        <div className="flex min-h-[calc(100dvh-4rem)] flex-col items-center justify-center gap-6 px-6 text-center">
-          <Upload className="h-14 w-14 text-muted-foreground" />
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Drop files to view and edit</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              We support Markdown, PDFs, Spreadsheets, Presentations, Images, and more!
+        <div className="flex min-h-[calc(100dvh-4rem)] flex-col items-center justify-center gap-7 px-6 text-center">
+          <BrandMark className="h-12 w-12 rounded-[14px] text-base" />
+          <div className="max-w-md">
+            <h1 className="text-3xl font-semibold tracking-[-0.04em] text-foreground">
+              A quieter place to read
+            </h1>
+            <p className="mt-3 text-[15px] leading-relaxed text-muted-foreground">
+              Drop files here — Markdown, PDFs, spreadsheets, decks, and images stay on this device.
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <button
               type="button"
               onClick={() => inputRef.current?.click()}
-              className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+              className="h-11 rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90"
             >
-              Upload any file
+              Upload files
             </button>
             {/* Nothing to right-click yet, so the sidebar's New menu is out of
                 reach — a blank document has to be startable from here too. */}
             <button
               type="button"
               onClick={() => createFile(null)}
-              className="rounded-xl border border-border bg-card px-5 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent"
+              className="h-11 rounded-xl border border-border bg-card px-5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
             >
               New markdown file
             </button>
@@ -2065,7 +2066,7 @@ export function DocsApp() {
   }
 
   return (
-    <div className="min-h-dvh bg-background">
+    <div className="min-h-dvh">
       <Header
         hideOnDesktop
         theme={theme}
@@ -2093,9 +2094,12 @@ export function DocsApp() {
       <div className="flex">
         <div
           ref={sidebarWrapRef}
-          className="sticky top-0 hidden h-dvh shrink-0 border-r border-border bg-background md:block md:portrait:hidden"
+          className="sticky top-0 hidden h-dvh shrink-0 bg-transparent p-2 pr-0 md:block md:portrait:hidden"
         >
-          <div ref={sidebarInnerRef} className="h-full" style={{ width: sidebarWidth }}>
+          <div
+            ref={sidebarInnerRef}
+            className="chrome-island mx-2 my-2 h-[calc(100%-1rem)] w-[calc(100%-1rem)] overflow-hidden rounded-[22px] bg-sidebar/90"
+          >
             <Sidebar
               files={files}
               activeFileId={activeFileId}
@@ -2154,7 +2158,7 @@ export function DocsApp() {
           </div>
 
           <div
-            className="absolute inset-y-0 left-0 flex w-14 flex-col items-center gap-4 border-r border-border bg-background py-3 z-20 transition-opacity duration-200"
+            className="chrome-island absolute inset-y-2 left-2 z-20 flex w-12 flex-col items-center gap-2 rounded-[22px] bg-sidebar/90 py-3 transition-opacity duration-200"
             style={{
               opacity: sidebarCollapsed ? 1 : 0,
               pointerEvents: sidebarCollapsed ? "auto" : "none",
@@ -2162,7 +2166,7 @@ export function DocsApp() {
           >
             <button
               onClick={() => setSidebarCollapsed(false)}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               aria-label="Expand sidebar"
               title="Expand sidebar"
             >
@@ -2170,7 +2174,7 @@ export function DocsApp() {
             </button>
             <button
               onClick={() => setPaletteOpen(true)}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               aria-label="Search docs or ask AI"
               title="Search docs or ask AI"
             >
@@ -2178,7 +2182,7 @@ export function DocsApp() {
             </button>
             <button
               onClick={() => inputRef.current?.click()}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               aria-label="Upload files"
               title="Upload files"
             >
@@ -2187,7 +2191,7 @@ export function DocsApp() {
             <div className="flex-1" />
             <button
               onClick={openSettings}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               aria-label="Settings"
               title="Settings"
             >
@@ -2224,12 +2228,16 @@ export function DocsApp() {
               className="absolute inset-0 bg-foreground/20 backdrop-blur-sm"
               onClick={() => setDrawerOpen(false)}
             />
-            <div className="absolute left-0 top-0 h-full w-80 max-w-[85vw] border-r border-border bg-background shadow-2xl animate-in slide-in-from-left duration-200">
-              <div className="flex h-14 items-center justify-between border-b border-border px-4">
-                <span className="text-sm font-semibold truncate px-1">
+            <div className="absolute left-2 top-2 h-[calc(100%-1rem)] w-80 max-w-[85vw] overflow-hidden rounded-[22px] border border-border bg-background shadow-2xl animate-in slide-in-from-left duration-200">
+              <div className="flex h-14 items-center justify-between border-b border-border/70 px-4">
+                <span className="truncate px-1 text-sm font-semibold tracking-tight">
                   {workspaceNameRef.current || "Workspace"}
                 </span>
-                <button onClick={() => setDrawerOpen(false)} aria-label="Close">
+                <button
+                  onClick={() => setDrawerOpen(false)}
+                  aria-label="Close"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -2489,15 +2497,15 @@ function Header({
 }) {
   return (
     <header
-      className={`app-surface z-(--z-nav) flex h-16 items-center justify-between border-b border-border px-4 md:px-6 relative ${
+      className={`app-surface z-(--z-nav) relative flex h-[3.75rem] items-center justify-between border-b border-border/60 px-3 md:px-5 ${
         hideOnDesktop ? "lg:hidden md:landscape:hidden" : ""
       }`}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         {!hideMenu && (
           <button
             onClick={() => onMenu?.()}
-            className="rounded-md p-2 transition-transform hover:bg-accent active:scale-90 lg:hidden md:landscape:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-xl transition-transform hover:bg-accent active:scale-95 lg:hidden md:landscape:hidden"
             aria-label="Menu"
           >
             <Menu className="h-4 w-4" />
@@ -2506,7 +2514,7 @@ function Header({
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
-            className={`hidden rounded-md p-2 text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-90 md:portrait:hidden ${sidebarCollapsed ? "md:hidden" : "md:inline-flex"}`}
+            className={`hidden h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-95 md:portrait:hidden ${sidebarCollapsed ? "md:hidden" : "md:inline-flex"}`}
             aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
@@ -2515,27 +2523,28 @@ function Header({
         )}
         <button
           onClick={onHome}
-          className="flex items-center gap-2 rounded-md px-1 py-1 text-muted-foreground transition-colors hover:text-foreground"
+          className="flex items-center gap-2 rounded-xl px-1.5 py-1 text-muted-foreground transition-colors hover:text-foreground"
           aria-label="Home"
           title="Home"
         >
+          <BrandMark />
           <span className="text-sm font-semibold tracking-tight text-foreground">Localdox</span>
         </button>
       </div>
 
       {hasFiles && (
-        <div className="absolute left-1/2 -translate-x-1/2 hidden lg:flex md:landscape:flex items-center">
+        <div className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex md:landscape:flex">
           <button
             onClick={onOpenPalette}
-            className="w-80 items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground flex"
+            className="flex w-80 items-center gap-2 rounded-full border border-border/80 bg-muted/40 px-3.5 py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/15 hover:bg-muted/70 hover:text-foreground"
           >
             <Search className="h-3.5 w-3.5" />
-            <span>Search...</span>
+            <span>Search</span>
             <span className="ml-auto flex items-center gap-1">
-              <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-xs">
+              <kbd className="rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[10px]">
                 ⌘
               </kbd>
-              <kbd className="rounded border border-border bg-background px-1 py-0.5 font-mono text-xs">
+              <kbd className="rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[10px]">
                 K
               </kbd>
             </span>
@@ -2543,11 +2552,11 @@ function Header({
         </div>
       )}
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1.5">
         {hasFiles && (
           <button
             onClick={onOpenPalette}
-            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden md:landscape:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden md:landscape:hidden"
             aria-label="Search"
           >
             <Search className="h-4 w-4" />
@@ -2588,7 +2597,7 @@ function Header({
         {onOpenSettings && (
           <button
             onClick={onOpenSettings}
-            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             aria-label="Settings"
             title="Settings"
           >

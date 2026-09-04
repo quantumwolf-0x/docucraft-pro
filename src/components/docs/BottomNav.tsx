@@ -33,7 +33,7 @@ export function BottomNav({
   };
 
   return (
-    <nav className="app-surface fixed bottom-0 left-0 right-0 z-(--z-nav) flex h-16 items-center justify-between border-t border-border px-6 lg:hidden">
+    <nav className="chrome-island app-surface fixed bottom-3 left-3 right-3 z-(--z-nav) mx-auto flex h-[4.25rem] max-w-lg items-center justify-between rounded-[22px] px-5 lg:hidden">
       {/* 1. Home */}
       <button
         onClick={onHome}
@@ -86,7 +86,7 @@ export function BottomNav({
       {/* 3. Upload CTA */}
       <button
         onClick={onUpload}
-        className="flex h-12 w-12 -translate-y-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 active:scale-95"
+        className="flex h-12 w-12 -translate-y-5 items-center justify-center rounded-full bg-foreground text-background shadow-lg transition-transform hover:scale-105 active:scale-95"
       >
         <Plus className="h-6 w-6" />
       </button>

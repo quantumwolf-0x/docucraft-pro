@@ -167,16 +167,16 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
       />
       <Command
         label="Search docs"
-        className="relative w-full max-w-2xl overflow-hidden rounded-xl border border-border bg-popover shadow-2xl animate-in fade-in-0 zoom-in-95 duration-100"
+        className="relative w-full max-w-xl overflow-hidden rounded-[22px] border border-border bg-popover shadow-[0_24px_80px_color-mix(in_oklab,var(--foreground)_16%,transparent)] animate-in fade-in-0 zoom-in-95 duration-150"
         shouldFilter={false}
       >
-        <div className="flex items-center gap-2 border-b border-border px-4">
+        <div className="flex items-center gap-3 border-b border-border/80 px-4">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
           <Command.Input
             value={query}
             onValueChange={setQuery}
             placeholder="Search all documentation..."
-            className="flex-1 bg-transparent py-4 text-sm outline-none placeholder:text-muted-foreground"
+            className="flex-1 bg-transparent py-4 text-[15px] outline-none placeholder:text-muted-foreground"
             autoFocus
           />
           <kbd className="hidden rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-mono text-muted-foreground sm:inline-block">
@@ -191,7 +191,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
                   key={r}
                   value={`recent-${r}`}
                   onSelect={() => setQuery(r)}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm data-[selected=true]:bg-accent"
+                  className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-sm data-[selected=true]:bg-accent"
                 >
                   <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="flex-1">{r}</span>
@@ -227,7 +227,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
                   key={`${fileName}-${i}`}
                   value={`${fileName}-${i}-${h.snippet}`}
                   onSelect={() => commit(h)}
-                  className="group flex cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-sm data-[selected=true]:bg-accent"
+                  className="group flex cursor-pointer items-start gap-2 rounded-xl px-2.5 py-2 text-sm data-[selected=true]:bg-accent"
                 >
                   {h.headingId ? (
                     <Hash className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -249,7 +249,7 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
             </Command.Group>
           ))}
         </Command.List>
-        <div className="flex items-center justify-between border-t border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border/80 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
           <div className="flex items-center gap-3">
             <span>
               <kbd className="rounded border border-border bg-background px-1">↑↓</kbd> navigate

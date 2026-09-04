@@ -43,7 +43,7 @@ export function ViewerHeader({
   return (
     <div
       ref={headerRef}
-      className="app-surface sticky top-0 z-(--z-sticky) flex h-14 shrink-0 items-center gap-2 border-b border-border/50 px-4 transition-transform duration-300 ease-out will-change-transform md:px-7"
+      className="app-surface sticky top-0 z-(--z-sticky) mx-2 mt-2 flex h-12 shrink-0 items-center gap-2 rounded-2xl border border-border/70 px-2 transition-transform duration-300 ease-out will-change-transform md:mx-4 md:px-3"
     >
       <div className="flex shrink-0 items-center gap-1">
         <HeaderNavButton
@@ -84,7 +84,7 @@ function HeaderNavButton({
       disabled={disabled}
       aria-label={label}
       title={label}
-      className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
+      className="flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
     >
       {children}
     </button>
@@ -95,10 +95,12 @@ function HeaderNavButton({
 export function HeaderTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
   return (
     <>
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground/70">
         {icon}
       </div>
-      <div className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{title}</div>
+      <div className="min-w-0 flex-1 truncate text-sm font-medium tracking-tight text-foreground">
+        {title}
+      </div>
     </>
   );
 }

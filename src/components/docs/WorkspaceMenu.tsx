@@ -134,7 +134,7 @@ export function WorkspaceMenu({
       ) : (
         <button
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex h-8 max-w-xs items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex h-8 max-w-xs items-center gap-1.5 rounded-full border border-border/80 bg-background/80 px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           title="Workspaces"
         >
           <FolderOpen className="h-4 w-4 shrink-0" />
@@ -156,7 +156,7 @@ export function WorkspaceMenu({
               left: pos.left,
               width: MENU_W,
             }}
-            className="z-(--z-dropdown) overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
+            className="z-(--z-dropdown) overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-[0_20px_50px_color-mix(in_oklab,var(--foreground)_14%,transparent)]"
           >
             <div className="max-h-[70vh] overflow-y-auto p-2">
               {current && (

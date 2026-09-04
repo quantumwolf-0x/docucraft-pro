@@ -67,7 +67,7 @@ export function Modal({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           className={cn(
-            "fixed inset-0 z-(--z-modal) bg-foreground/25 backdrop-blur-sm",
+            "fixed inset-0 z-(--z-modal) bg-foreground/20 backdrop-blur-md",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
           )}
         />
@@ -79,7 +79,7 @@ export function Modal({
         >
           <DialogPrimitive.Content
             className={cn(
-              "flex max-h-full w-full flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl outline-none",
+              "flex max-h-full w-full flex-col overflow-hidden rounded-[22px] border border-border bg-background shadow-[0_24px_80px_color-mix(in_oklab,var(--foreground)_18%,transparent)] outline-none",
               "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-150",
               sizeClass[size],
               className,

@@ -518,8 +518,8 @@ function SidebarImpl({
                 }
               : undefined
           }
-          className={`group flex items-center gap-1 rounded-lg px-1 transition-colors ${
-            current ? "bg-accent/60" : ""
+          className={`group flex items-center gap-1 rounded-xl px-1 transition-colors ${
+            current ? "bg-accent" : "hover:bg-accent/50"
           } ${dragActive ? "cursor-grab active:cursor-grabbing" : ""} ${
             isDragging ? "opacity-40" : ""
           } ${isDropTarget ? "ring-2 ring-primary/60" : ""}`}
@@ -697,7 +697,7 @@ function SidebarImpl({
               <button
                 onClick={() => setCreatingOpen((o) => !o)}
                 aria-expanded={creatingOpen}
-                className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-xl border border-border bg-background px-2 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <Plus className="h-4 w-4 shrink-0" />
                 <span className="truncate">Create</span>
@@ -738,7 +738,7 @@ function SidebarImpl({
 
           <button
             onClick={onAddFiles}
-            className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-xl border border-border bg-background px-2 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <Upload className="h-4 w-4 shrink-0" />
             <span className="truncate">Upload</span>

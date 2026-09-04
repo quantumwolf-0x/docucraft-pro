@@ -85,25 +85,25 @@ export function SettingsPage({
   ] as const;
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-6 md:p-10">
-      <div className="mb-8 flex items-center gap-4">
+    <div className="mx-auto w-full max-w-3xl p-6 md:p-12">
+      <div className="mb-10 flex items-center gap-4">
         <Link
           to="/"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           aria-label="Go back home"
         >
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Settings</h1>
+          <h1 className="text-3xl font-semibold tracking-[-0.04em] text-foreground">Settings</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage your workspaces, data, and preferences.
+            Reading, workspaces, and data on this device.
           </p>
         </div>
       </div>
 
       <div className="flex flex-col gap-8">
-        <nav className="grid grid-cols-5 gap-2 overflow-x-auto pb-2 scrollbar-hide sm:flex sm:flex-row">
+        <nav className="grid grid-cols-5 gap-1.5 overflow-x-auto rounded-2xl border border-border/80 bg-card/70 p-1.5 pb-1.5 scrollbar-hide sm:flex sm:flex-row">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
@@ -111,9 +111,9 @@ export function SettingsPage({
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-col items-center justify-center gap-1.5 rounded-lg p-2.5 transition-colors sm:min-w-20 ${
+                className={`flex min-h-11 flex-col items-center justify-center gap-1.5 rounded-xl p-2.5 transition-colors sm:min-w-24 ${
                   active
-                    ? "bg-primary/10 text-primary font-semibold"
+                    ? "bg-foreground text-background font-medium"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground font-medium"
                 }`}
                 title={tab.label}
@@ -187,10 +187,10 @@ const READER_THEME_META: {
     id: "light",
     label: "Light",
     hint: "Bright, high contrast",
-    bg: "#ffffff",
-    fg: "#1c1c28",
-    muted: "#6b7280",
-    accent: "#2b2b40",
+    bg: "#f4f5f8",
+    fg: "#1a1d27",
+    muted: "#667085",
+    accent: "#e07a45",
   },
   {
     id: "sepia",
@@ -205,10 +205,10 @@ const READER_THEME_META: {
     id: "dark",
     label: "Dark",
     hint: "Balanced slate for night reading",
-    bg: "#0f1420",
+    bg: "#1a1e2a",
     fg: "#eceef2",
     muted: "#9aa3b2",
-    accent: "#e6e9ef",
+    accent: "#e07a45",
   },
   {
     id: "nord",

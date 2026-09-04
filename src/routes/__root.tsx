@@ -11,6 +11,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { applyDeviceTier } from "@/lib/device-tier";
+import { BrandMark } from "@/components/docs/BrandMark";
 
 // Mermaid loads each diagram type (flowchart, ERD, etc.) in a separate Vite
 // chunk. After a deployment, an already-open tab can still reference a chunk
@@ -37,15 +38,16 @@ function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
-        <h1 className="text-7xl font-bold text-foreground">404</h1>
-        <h2 className="mt-4 text-xl font-semibold text-foreground">Page not found</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          The page you're looking for doesn't exist or has been moved.
+        <BrandMark className="mx-auto h-10 w-10 rounded-[12px] text-sm" />
+        <h1 className="mt-6 text-6xl font-semibold tracking-[-0.05em] text-foreground">404</h1>
+        <h2 className="mt-3 text-lg font-medium text-foreground">This page isn't here</h2>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          The page you're looking for doesn't exist, or it moved.
         </p>
-        <div className="mt-6">
+        <div className="mt-7">
           <Link
             to="/"
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            className="inline-flex h-11 items-center justify-center rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90"
           >
             Go home
           </Link>
@@ -68,7 +70,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <h1 className="text-xl font-semibold tracking-tight text-foreground">
           This page didn't load
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           Something went wrong on our end. You can try refreshing or head back home.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
@@ -77,13 +79,13 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
               router.invalidate();
               reset();
             }}
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            className="inline-flex h-11 items-center justify-center rounded-xl bg-foreground px-5 text-sm font-medium text-background transition-opacity hover:opacity-90"
           >
             Try again
           </button>
           <a
             href="/"
-            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-input bg-background px-5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
           >
             Go home
           </a>
@@ -99,15 +101,15 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       {
         name: "viewport",
-        content: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0",
+        content: "width=device-width, initial-scale=1",
       },
       { title: "Localdox" },
       { name: "description", content: "Localdox" },
       { name: "author", content: "Localdox" },
       { property: "og:title", content: "Localdox" },
       { property: "og:description", content: "Localdox" },
-      { name: "theme-color", content: "#ffffff", media: "(prefers-color-scheme: light)" },
-      { name: "theme-color", content: "#09090b", media: "(prefers-color-scheme: dark)" },
+      { name: "theme-color", content: "#f4f5f8", media: "(prefers-color-scheme: light)" },
+      { name: "theme-color", content: "#1a1e2a", media: "(prefers-color-scheme: dark)" },
       { property: "og:image", content: "https://localdox.web.app/og-image.jpg" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

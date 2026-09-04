@@ -138,16 +138,16 @@ export function AskAiPanel({
         className="absolute inset-0 bg-foreground/20 backdrop-blur-sm hidden lg:block md:landscape:block"
         onClick={onClose}
       />
-      <aside className="relative flex h-full w-full flex-col bg-background animate-in slide-in-from-right duration-200 lg:max-w-md md:landscape:max-w-md lg:border-l md:landscape:border-l border-border lg:shadow-2xl md:landscape:shadow-2xl">
+      <aside className="relative flex h-full w-full flex-col border-border bg-background animate-in slide-in-from-right duration-200 lg:my-2 lg:mr-2 lg:max-w-md lg:rounded-[22px] lg:border lg:shadow-[0_20px_60px_color-mix(in_oklab,var(--foreground)_12%,transparent)] md:landscape:my-2 md:landscape:mr-2 md:landscape:max-w-md md:landscape:rounded-[22px] md:landscape:border">
         {/* Header */}
-        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border/80 px-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-muted text-foreground">
             <Sparkles className="h-4 w-4" />
           </div>
-          <span className="flex-1 text-sm font-semibold">Ask AI</span>
+          <span className="flex-1 text-sm font-semibold tracking-tight">Ask AI</span>
           <button
             onClick={onClose}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-muted-foreground hover:bg-accent hover:text-foreground"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
