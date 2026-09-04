@@ -152,6 +152,84 @@ function uniqueFileName(name: string, taken: Set<string>): string {
   }
 }
 
+/**
+ * Workspace names are how the reader tells one workspace from another in the
+ * switcher, so two carrying the same name is a real ambiguity rather than a
+ * cosmetic one. Compared case- and whitespace-insensitively: "Notes" and
+ * "notes " are the same name to a person reading the list.
+ */
+function normalizeWorkspaceName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** `Notes` → `Notes (2)` when a workspace already carries that name. */
+function availableWorkspaceName(name: string, existing: { name: string }[]): string {
+  const taken = new Set(existing.map((w) => normalizeWorkspaceName(w.name)));
+  const base = name.trim() || "Workspace";
+  if (!taken.has(normalizeWorkspaceName(base))) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} (${n})`;
+    if (!taken.has(normalizeWorkspaceName(candidate))) return candidate;
+  }
+}
+
+/**
+ * Asks for a different workspace name until one is free, or the reader cancels.
+ *
+ * `existing` holds the names already in use; `excludeId` lets a rename keep its
+ * own current name. Returns the accepted name, or `null` when the reader backs
+ * out of the prompt.
+ */
+function resolveWorkspaceName(
+  proposed: string,
+  existing: { id: string; name: string }[],
+  opts: { excludeId?: string; whatIsIt?: string } = {},
+): string | null {
+  const { excludeId, whatIsIt = "A workspace" } = opts;
+  const taken = new Set(
+    existing.filter((w) => w.id !== excludeId).map((w) => normalizeWorkspaceName(w.name)),
+  );
+  let candidate = proposed.trim();
+  while (candidate && taken.has(normalizeWorkspaceName(candidate))) {
+    const next = window.prompt(
+      `${whatIsIt} named “${candidate}” already exists. Enter a different name:`,
+      candidate,
+    );
+    if (next == null) return null; // cancelled — leave everything untouched
+    candidate = next.trim();
+  }
+  return candidate || null;
+}
+
+/**
+ * A file already in the workspace that the incoming one duplicates.
+ *
+ * Two kinds of duplicate matter, and they are not the same problem: the same
+ * bytes arriving again (re-uploading a file that is already here, which is
+ * simply redundant) and a different document arriving under a name that is
+ * taken (which would leave two indistinguishable rows in the sidebar).
+ */
+type DuplicateKind = "content" | "name";
+
+function fileFingerprint(f: { content?: string; data?: string }): string {
+  // Binary files carry their bytes in `data`; text ones in `content`. Either is
+  // a faithful identity for "the same file uploaded twice".
+  return f.data ?? f.content ?? "";
+}
+
+function findDuplicate(
+  incoming: { name: string; content?: string; data?: string },
+  existing: MdFile[],
+): { kind: DuplicateKind; file: MdFile } | null {
+  const print = fileFingerprint(incoming);
+  if (print) {
+    const same = existing.find((f) => fileFingerprint(f) === print);
+    if (same) return { kind: "content", file: same };
+  }
+  const clash = existing.find((f) => f.name === incoming.name);
+  return clash ? { kind: "name", file: clash } : null;
+}
+
 export function DocsApp() {
   const [files, setFiles] = useState<MdFile[]>([]);
   // Sidebar folders. Flat buckets over the file list — a file's `folderId` says
@@ -567,7 +645,11 @@ export function DocsApp() {
             const json = await fetchShare(window.location.hash.slice(SHARE_HASH.length));
             const ws = parseWorkspaceImport(json);
             ws.id = crypto.randomUUID();
-            ws.name = `${ws.name} (Shared)`;
+            // This runs during boot, before anything is on screen, so a name
+            // clash is settled by numbering rather than by a modal prompt the
+            // reader would meet before the app has even drawn.
+            const already = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
+            ws.name = availableWorkspaceName(`${ws.name} (Shared)`, already);
             await persistence.putWorkspace(ws);
             hashSharedWs = ws;
             window.history.replaceState(
@@ -701,10 +783,56 @@ export function DocsApp() {
           }),
         );
 
-        const nextFiles = [...snapshotRef.current.files, ...parsed];
+        // Duplicate check runs after parsing, because "the same file" means the
+        // same bytes, not the same filename. A re-upload of something already
+        // here is dropped; a genuinely different document arriving under a
+        // taken name is kept, under a name the reader chooses.
+        const kept: MdFile[] = [];
+        const skipped: string[] = [];
+        // Grows as the batch is processed, so two identical files picked in one
+        // go are caught against each other, not just against what is stored.
+        const pool = [...snapshotRef.current.files];
+
+        for (const file of parsed) {
+          const dup = findDuplicate(file, pool);
+          if (dup?.kind === "content") {
+            skipped.push(file.name);
+            continue;
+          }
+          if (dup?.kind === "name") {
+            const taken = new Set(pool.map((f) => f.name));
+            const suggestion = uniqueFileName(file.name, taken);
+            const answer = window.prompt(
+              `“${file.name}” already exists in this workspace and the contents differ. ` +
+                `Enter a name for the new copy, or cancel to skip it:`,
+              suggestion,
+            );
+            const chosen = answer?.trim();
+            if (!chosen) {
+              skipped.push(file.name);
+              continue;
+            }
+            file.name = uniqueFileName(chosen, taken);
+            file.kind = getDocumentKind(file.name, file.mimeType);
+          }
+          kept.push(file);
+          pool.push(file);
+        }
+
+        if (skipped.length) {
+          const label =
+            skipped.length === 1 ? `“${skipped[0]}”` : `${skipped.length} duplicate files`;
+          toast.info(`Skipped ${label} — already in this workspace.`);
+        }
+        if (kept.length === 0) {
+          toast.dismiss(toastId);
+          return;
+        }
+
+        const nextFiles = [...snapshotRef.current.files, ...kept];
         // Keep the currently open file if one is open; otherwise open the first
         // of the just-uploaded batch.
-        const nextActiveFileId = snapshotRef.current.activeFileId ?? parsed[0]?.id ?? null;
+        const nextActiveFileId = snapshotRef.current.activeFileId ?? kept[0]?.id ?? null;
 
         if (!workspaceIdRef.current) {
           const id = crypto.randomUUID();
@@ -712,7 +840,7 @@ export function DocsApp() {
           workspaceNameRef.current = "My workspace";
           createdAtRef.current = Date.now();
           setWorkspaceId(id);
-          setWorkspaces([{ id, name: workspaceNameRef.current, docCount: 1 }]);
+          setWorkspaces([{ id, name: workspaceNameRef.current, docCount: nextFiles.length }]);
           savePrefs({ lastWorkspaceId: id });
         }
 
@@ -729,7 +857,7 @@ export function DocsApp() {
         await persistence.putWorkspace(buildRecord());
         setSaveStatus("saved");
 
-        toast.success(`Successfully uploaded ${total} file${total > 1 ? "s" : ""}!`, {
+        toast.success(`Successfully uploaded ${kept.length} file${kept.length > 1 ? "s" : ""}!`, {
           id: toastId,
         });
         navigate({ to: "/" }); // Uploading takes you straight into reading.
@@ -1264,9 +1392,18 @@ export function DocsApp() {
     clearArtifactResolutionCache();
   }, [workspaceRevision]);
 
+  // The workspace list held in state is a render-time convenience; name checks
+  // read the store directly so a workspace created in another tab still counts.
+  const storedWorkspaces = useCallback(
+    () => persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]),
+    [],
+  );
+
   const newWorkspace = useCallback(
     async (name?: string) => {
-      const finalName = name || window.prompt("Enter new workspace name:");
+      const asked = name || window.prompt("Enter new workspace name:");
+      if (!asked) return;
+      const finalName = resolveWorkspaceName(asked, await storedWorkspaces());
       if (!finalName) return;
       await persistNow(true);
       const ws = newWorkspaceRecord(finalName);
@@ -1275,13 +1412,39 @@ export function DocsApp() {
       hydrateWorkspace(ws);
       savePrefs({ lastWorkspaceId: ws.id });
     },
-    [persistNow, refreshWorkspaceList, hydrateWorkspace, workspaces.length],
+    [persistNow, refreshWorkspaceList, hydrateWorkspace, storedWorkspaces],
   );
 
   const importWorkspace = useCallback(
     async (file: File) => {
       try {
         const ws = parseWorkspaceImport(await file.text());
+        const existing = await storedWorkspaces();
+
+        // The same export imported twice would otherwise overwrite the copy
+        // already here (`put` keys on id), silently discarding whatever has
+        // been read, highlighted or saved in it since.
+        const sameRecord = existing.find((w) => w.id === ws.id);
+        if (sameRecord) {
+          const keepBoth = window.confirm(
+            `“${sameRecord.name}” has already been imported. ` +
+              `Import it again as a separate copy?\n\n` +
+              `Cancel leaves the workspace you already have untouched.`,
+          );
+          if (!keepBoth) {
+            await switchWorkspace(sameRecord.id);
+            return;
+          }
+          ws.id = crypto.randomUUID();
+        }
+
+        const finalName = resolveWorkspaceName(ws.name, existing, {
+          excludeId: ws.id,
+          whatIsIt: "A workspace",
+        });
+        if (!finalName) return; // reader cancelled the rename — import nothing
+        ws.name = finalName;
+
         await persistNow(true);
         await persistence.putWorkspace(ws);
         await refreshWorkspaceList();
@@ -1292,7 +1455,7 @@ export function DocsApp() {
         alert("That file isn't a valid workspace export.");
       }
     },
-    [persistNow, refreshWorkspaceList, hydrateWorkspace],
+    [persistNow, refreshWorkspaceList, hydrateWorkspace, storedWorkspaces, switchWorkspace],
   );
 
   const exportWorkspace = useCallback(() => {
@@ -1513,14 +1676,16 @@ export function DocsApp() {
     async (id: string, newName: string) => {
       const ws = await persistence.getWorkspace(id);
       if (!ws) return;
-      ws.name = newName;
+      const finalName = resolveWorkspaceName(newName, await storedWorkspaces(), { excludeId: id });
+      if (!finalName || finalName === ws.name) return;
+      ws.name = finalName;
       await persistence.putWorkspace(ws);
       if (id === workspaceIdRef.current) {
-        workspaceNameRef.current = newName;
+        workspaceNameRef.current = finalName;
       }
       await refreshWorkspaceList();
     },
-    [refreshWorkspaceList],
+    [refreshWorkspaceList, storedWorkspaces],
   );
 
   const clearAllStorage = useCallback(async () => {
