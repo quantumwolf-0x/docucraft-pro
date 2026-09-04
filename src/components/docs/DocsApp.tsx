@@ -33,7 +33,9 @@ const DocumentViewer = lazy(() =>
 const CommandPalette = lazy(() =>
   import("./CommandPalette").then((m) => ({ default: m.CommandPalette })),
 );
-const SettingsPage = lazy(() => import("./SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const SettingsPage = lazy(() =>
+  import("./SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
 const HighlightsOnlyModal = lazy(() =>
   import("./HighlightsOnlyModal").then((m) => ({ default: m.HighlightsOnlyModal })),
 );
@@ -376,11 +378,14 @@ export function DocsApp() {
     // of the content column — the reflow it drives is the point of the effect.
     if (wrap.animate) {
       animations.push(
-        wrap.animate([{ width: wrap.getBoundingClientRect().width + "px" }, { width: `${width}px` }], {
-          duration: 450,
-          easing: "cubic-bezier(0.65, 0, 0.35, 1)",
-          fill: "forwards",
-        }),
+        wrap.animate(
+          [{ width: wrap.getBoundingClientRect().width + "px" }, { width: `${width}px` }],
+          {
+            duration: 450,
+            easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+            fill: "forwards",
+          },
+        ),
       );
     }
     wrap.style.width = `${width}px`;
@@ -409,12 +414,14 @@ export function DocsApp() {
       if (sidebarCollapsed) {
         if (fade) {
           animations.push(fade);
-          void fade.finished.then(() => {
-            // Guard against a re-expand landing while the fade was running.
-            if (inner.style.opacity === "0") inner.style.visibility = "hidden";
-          }).catch(() => {
-            /* cancelled by a state change — the next run sets visibility */
-          });
+          void fade.finished
+            .then(() => {
+              // Guard against a re-expand landing while the fade was running.
+              if (inner.style.opacity === "0") inner.style.visibility = "hidden";
+            })
+            .catch(() => {
+              /* cancelled by a state change — the next run sets visibility */
+            });
         } else {
           inner.style.visibility = "hidden";
         }
@@ -569,60 +576,63 @@ export function DocsApp() {
     saveTimer.current = setTimeout(() => void persistNow(false), 700);
   }, [persistNow]);
 
-  const hydrateWorkspace = useCallback((ws: WorkspaceRecord) => {
-    const wsFolders = ws.folders ?? [];
-    const folderIds = new Set(wsFolders.map((f) => f.id));
-    // A file can outlive its folder (an older export, a share link that carried
-    // files but no folders). Those fall back to the top level instead of
-    // vanishing into a folder that is never rendered.
-    const parsed: MdFile[] = ws.files.map((f) => {
-      const file = toMdFile(f);
-      return file.folderId && folderIds.has(file.folderId) ? file : { ...file, folderId: null };
-    });
-
-    if (ws.ui?.fileOrder && ws.ui.fileOrder.length > 0) {
-      const order = ws.ui.fileOrder;
-      parsed.sort((a, b) => {
-        const idxA = order.indexOf(a.id);
-        const idxB = order.indexOf(b.id);
-        if (idxA === -1 && idxB === -1) return 0;
-        if (idxA === -1) return 1;
-        if (idxB === -1) return -1;
-        return idxA - idxB;
+  const hydrateWorkspace = useCallback(
+    (ws: WorkspaceRecord) => {
+      const wsFolders = ws.folders ?? [];
+      const folderIds = new Set(wsFolders.map((f) => f.id));
+      // A file can outlive its folder (an older export, a share link that carried
+      // files but no folders). Those fall back to the top level instead of
+      // vanishing into a folder that is never rendered.
+      const parsed: MdFile[] = ws.files.map((f) => {
+        const file = toMdFile(f);
+        return file.folderId && folderIds.has(file.folderId) ? file : { ...file, folderId: null };
       });
-    }
 
-    setFiles(parsed);
-    setFolders(wsFolders);
-    setAutoEditFileId(null);
-    setActiveFileId(ws.ui?.activeFileId ?? parsed[0]?.id ?? null);
-    setRecentFileIds(ws.ui?.recentFileIds ?? []);
-    setExpanded(ws.ui?.expanded ?? {});
-    setSidebarCollapsed(!!ws.ui?.sidebarCollapsed);
-    setSaved(ws.saved?.length ? ws.saved : migrateBookmarks(ws.bookmarks ?? [], parsed));
-    resetHighlights((ws.highlights ?? []).filter((h) => typeof h.text === "string"));
-    setWorkspaceId(ws.id);
-    workspaceIdRef.current = ws.id;
-    workspaceNameRef.current = ws.name;
-    createdAtRef.current = ws.createdAt ?? Date.now();
-    // The live position is tracked in localStorage (see `saveScrollTop`); the
-    // record's own value is the fallback for an imported or shared workspace
-    // that has never been scrolled on this device.
-    const st = loadScrollTop(ws.id) ?? ws.ui?.scrollTop ?? 0;
-    scrollRef.current = st;
-    // A freshly hydrated workspace is exactly what is on disk.
-    mutationRef.current = 0;
-    savedMutationRef.current = 0;
-    // Restore the exact scroll after the document has painted. Runs after the
-    // viewer's own mount effects, so it wins.
-    setTimeout(() => window.scrollTo({ top: st }), 350);
-    setSaveStatus("restored");
-    if (restoredFlash.current) clearTimeout(restoredFlash.current);
-    restoredFlash.current = setTimeout(
-      () => setSaveStatus((s) => (s === "restored" ? "saved" : s)),
-      2500,
-    );
-  }, [resetHighlights]);
+      if (ws.ui?.fileOrder && ws.ui.fileOrder.length > 0) {
+        const order = ws.ui.fileOrder;
+        parsed.sort((a, b) => {
+          const idxA = order.indexOf(a.id);
+          const idxB = order.indexOf(b.id);
+          if (idxA === -1 && idxB === -1) return 0;
+          if (idxA === -1) return 1;
+          if (idxB === -1) return -1;
+          return idxA - idxB;
+        });
+      }
+
+      setFiles(parsed);
+      setFolders(wsFolders);
+      setAutoEditFileId(null);
+      setActiveFileId(ws.ui?.activeFileId ?? parsed[0]?.id ?? null);
+      setRecentFileIds(ws.ui?.recentFileIds ?? []);
+      setExpanded(ws.ui?.expanded ?? {});
+      setSidebarCollapsed(!!ws.ui?.sidebarCollapsed);
+      setSaved(ws.saved?.length ? ws.saved : migrateBookmarks(ws.bookmarks ?? [], parsed));
+      resetHighlights((ws.highlights ?? []).filter((h) => typeof h.text === "string"));
+      setWorkspaceId(ws.id);
+      workspaceIdRef.current = ws.id;
+      workspaceNameRef.current = ws.name;
+      createdAtRef.current = ws.createdAt ?? Date.now();
+      // The live position is tracked in localStorage (see `saveScrollTop`); the
+      // record's own value is the fallback for an imported or shared workspace
+      // that has never been scrolled on this device.
+      const st = loadScrollTop(ws.id) ?? ws.ui?.scrollTop ?? 0;
+      scrollRef.current = st;
+      // A freshly hydrated workspace is exactly what is on disk.
+      mutationRef.current = 0;
+      savedMutationRef.current = 0;
+      // Restore the exact scroll after the document has painted. Runs after the
+      // viewer's own mount effects, so it wins.
+      setTimeout(() => window.scrollTo({ top: st }), 350);
+      setSaveStatus("restored");
+      if (restoredFlash.current) clearTimeout(restoredFlash.current);
+      restoredFlash.current = setTimeout(
+        () => setSaveStatus((s) => (s === "restored" ? "saved" : s)),
+        2500,
+      );
+    },
+    [resetHighlights],
+  );
 
   const refreshWorkspaceList = useCallback(async () => {
     const list = await persistence.listWorkspaces().catch(() => [] as WorkspaceRecord[]);
@@ -972,41 +982,44 @@ export function DocsApp() {
     [navigate, markDirty],
   );
 
-  const removeFile = useCallback((id: string) => {
-    const files = filesRef.current;
-    const index = files.findIndex((f) => f.id === id);
-    const fileToRestore = files[index];
-    const activeWas = activeFileIdRef.current;
+  const removeFile = useCallback(
+    (id: string) => {
+      const files = filesRef.current;
+      const index = files.findIndex((f) => f.id === id);
+      const fileToRestore = files[index];
+      const activeWas = activeFileIdRef.current;
 
-    if (!fileToRestore) return;
+      if (!fileToRestore) return;
 
-    setFiles((prev) => prev.filter((f) => f.id !== id));
-    if (activeWas === id) {
-      setActiveFileId(files.find((f) => f.id !== id)?.id ?? null);
-    }
-    markDirty();
+      setFiles((prev) => prev.filter((f) => f.id !== id));
+      if (activeWas === id) {
+        setActiveFileId(files.find((f) => f.id !== id)?.id ?? null);
+      }
+      markDirty();
 
-    toast("File deleted", {
-      description: fileToRestore.name,
-      duration: 6000,
-      icon: <Undo2 className="h-4 w-4" />,
-      className: "bg-background/60 backdrop-blur-xl border border-border/50 shadow-2xl",
-      action: {
-        label: "Undo",
-        onClick: () => {
-          setFiles((prev) => {
-            const newFiles = [...prev];
-            newFiles.splice(index, 0, fileToRestore);
-            return newFiles;
-          });
-          if (activeWas === id) {
-            setActiveFileId(id);
-          }
-          markDirty();
+      toast("File deleted", {
+        description: fileToRestore.name,
+        duration: 6000,
+        icon: <Undo2 className="h-4 w-4" />,
+        className: "bg-background/60 backdrop-blur-xl border border-border/50 shadow-2xl",
+        action: {
+          label: "Undo",
+          onClick: () => {
+            setFiles((prev) => {
+              const newFiles = [...prev];
+              newFiles.splice(index, 0, fileToRestore);
+              return newFiles;
+            });
+            if (activeWas === id) {
+              setActiveFileId(id);
+            }
+            markDirty();
+          },
         },
-      },
-    });
-  }, [markDirty]);
+      });
+    },
+    [markDirty],
+  );
 
   const toggleArchiveFile = useCallback(
     (id: string) => {
@@ -1017,20 +1030,20 @@ export function DocsApp() {
   );
 
   const downloadFile = useCallback((id: string) => {
-      const file = filesRef.current.find((f) => f.id === id);
-      if (!file) return;
-      let url = "";
-      if (file.data) {
-        url = file.data;
-      } else {
-        const blob = new Blob([file.content], { type: file.mimeType || "text/markdown" });
-        url = URL.createObjectURL(blob);
-      }
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = file.name;
-      a.click();
-      if (!file.data) URL.revokeObjectURL(url);
+    const file = filesRef.current.find((f) => f.id === id);
+    if (!file) return;
+    let url = "";
+    if (file.data) {
+      url = file.data;
+    } else {
+      const blob = new Blob([file.content], { type: file.mimeType || "text/markdown" });
+      url = URL.createObjectURL(blob);
+    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name;
+    a.click();
+    if (!file.data) URL.revokeObjectURL(url);
   }, []);
 
   const renameFile = useCallback(
@@ -1329,9 +1342,7 @@ export function DocsApp() {
       // them from the new content and caches the result.
       setFiles((prev) =>
         prev.map((f) =>
-          f.id === fileId
-            ? { ...f, content, headings: undefined, subtopics: undefined }
-            : f,
+          f.id === fileId ? { ...f, content, headings: undefined, subtopics: undefined } : f,
         ),
       );
       markDirty();
@@ -1799,7 +1810,10 @@ export function DocsApp() {
     [handleSelect],
   );
 
-  const navToFile = useCallback((fileId: string) => handleSelect(fileId, undefined), [handleSelect]);
+  const navToFile = useCallback(
+    (fileId: string) => handleSelect(fileId, undefined),
+    [handleSelect],
+  );
 
   const toggleActiveDocumentSaved = useCallback(() => {
     if (activeFile) toggleSaved(activeFile.id, { kind: "file", title: activeFile.name });
@@ -1822,9 +1836,7 @@ export function DocsApp() {
 
   const aiActiveFile = useMemo(
     () =>
-      activeFile
-        ? { id: activeFile.id, name: activeFile.name, content: activeFile.content }
-        : null,
+      activeFile ? { id: activeFile.id, name: activeFile.name, content: activeFile.content } : null,
     [activeFile],
   );
 
@@ -2233,8 +2245,8 @@ export function DocsApp() {
                   onRemoveFile={removeFile}
                   onArchiveFile={toggleArchiveFile}
                   onDownloadFile={downloadFile}
-              onShareFile={shareFile}
-              onShareFiles={(ids) => void shareFiles(ids)}
+                  onShareFile={shareFile}
+                  onShareFiles={(ids) => void shareFiles(ids)}
                   onRenameFile={renameFile}
                   folders={folders}
                   onCreateFile={createFile}
@@ -2280,87 +2292,85 @@ export function DocsApp() {
         {/* One boundary for the whole content column. The settings page and the
             binary-document viewers are code-split; the markdown viewer is not,
             so the common case never suspends here. */}
-        <Suspense
-          fallback={<main className="min-w-0 flex-1" aria-busy />}
-        >
-        <main className="min-w-0 flex-1 pb-24 lg:pb-0 md:landscape:pb-0">
-          {showSettings ? (
-            <SettingsPage
-              workspaces={workspaces}
-              currentWorkspaceId={workspaceId}
-              onRenameWorkspace={renameWorkspace}
-              onDeleteWorkspace={deleteWorkspace}
-              onClearStorage={clearAllStorage}
-              saved={savedEntries}
-              onOpenSaved={openSaved}
-              onRemoveSaved={removeSaved}
-              onClearSaved={() => {
-                setSaved([]);
-                markDirty();
-              }}
-              highlights={highlights}
-              onRemoveHighlight={removeHighlight}
-              onClearHighlights={() => {
-                setHighlights([]);
-                markDirty();
-              }}
-              onNavigate={openFromHome}
-              files={files}
-              onOpenWorkspace={openWorkspaceFromHome}
-              theme={theme}
-              onSetTheme={setTheme}
-              readingMode={readingMode}
-              onSetReadingMode={setReadingMode}
-              readingFont={readingFont}
-              onSetReadingFont={setReadingFont}
-              onToggleArchiveFile={toggleArchiveFile}
-            />
-          ) : activeFile &&
-            (activeFile.kind === "markdown" || activeFile.kind === "text" || !activeFile.kind) ? (
-            <MarkdownViewer
-              file={activeFile}
-              prevFile={prevFile}
-              nextFile={nextFile}
-              onNav={navFromViewer}
-              activeSubtopicId={activeHeadingId}
-              highlightQuery={highlightQuery}
-              onContentChange={handleContentChange}
-              startInEditFileId={autoEditFileId}
-              onStartInEditConsumed={consumeStartInEdit}
-              nextReadingMin={nextReadingMinutes}
-              isBookmarked={!!activePageSaved}
-              onToggleBookmark={toggleActivePageSaved}
-              highlights={activeFileHighlights}
-              onAddHighlight={addHighlightToActive}
-              onUpdateHighlight={updateHighlight}
-              onRemoveHighlight={removeHighlight}
-              onRepairHighlights={repairHighlights}
-              saved={activeFileSaved}
-              onToggleSaved={toggleSavedOnActive}
-              onRemoveSaved={removeSaved}
-              pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
-              onSavedShown={clearPendingSaved}
-              onHome={goHome}
-              onShareFile={shareActiveFile}
-              onAskAi={askAiFromSelection}
-              readingMode={readingMode}
-              workspaceId={workspaceId}
-              workspaceRevision={workspaceRevision}
-              workspaceFiles={files}
-              workspaceName={workspaceNameRef.current}
-              onOpenArtifact={openEmbeddedArtifact}
-            />
-          ) : activeFile ? (
-            <DocumentViewer
-              file={activeFile}
-              isBookmarked={!!findSaved(saved, { fileId: activeFile.id, kind: "file" })}
-              onToggleBookmark={toggleActiveDocumentSaved}
-              prevFile={prevFile}
-              nextFile={nextFile}
-              onNavFile={navToFile}
-            />
-          ) : null}
-        </main>
+        <Suspense fallback={<main className="min-w-0 flex-1" aria-busy />}>
+          <main className="min-w-0 flex-1 pb-24 lg:pb-0 md:landscape:pb-0">
+            {showSettings ? (
+              <SettingsPage
+                workspaces={workspaces}
+                currentWorkspaceId={workspaceId}
+                onRenameWorkspace={renameWorkspace}
+                onDeleteWorkspace={deleteWorkspace}
+                onClearStorage={clearAllStorage}
+                saved={savedEntries}
+                onOpenSaved={openSaved}
+                onRemoveSaved={removeSaved}
+                onClearSaved={() => {
+                  setSaved([]);
+                  markDirty();
+                }}
+                highlights={highlights}
+                onRemoveHighlight={removeHighlight}
+                onClearHighlights={() => {
+                  setHighlights([]);
+                  markDirty();
+                }}
+                onNavigate={openFromHome}
+                files={files}
+                onOpenWorkspace={openWorkspaceFromHome}
+                theme={theme}
+                onSetTheme={setTheme}
+                readingMode={readingMode}
+                onSetReadingMode={setReadingMode}
+                readingFont={readingFont}
+                onSetReadingFont={setReadingFont}
+                onToggleArchiveFile={toggleArchiveFile}
+              />
+            ) : activeFile &&
+              (activeFile.kind === "markdown" || activeFile.kind === "text" || !activeFile.kind) ? (
+              <MarkdownViewer
+                file={activeFile}
+                prevFile={prevFile}
+                nextFile={nextFile}
+                onNav={navFromViewer}
+                activeSubtopicId={activeHeadingId}
+                highlightQuery={highlightQuery}
+                onContentChange={handleContentChange}
+                startInEditFileId={autoEditFileId}
+                onStartInEditConsumed={consumeStartInEdit}
+                nextReadingMin={nextReadingMinutes}
+                isBookmarked={!!activePageSaved}
+                onToggleBookmark={toggleActivePageSaved}
+                highlights={activeFileHighlights}
+                onAddHighlight={addHighlightToActive}
+                onUpdateHighlight={updateHighlight}
+                onRemoveHighlight={removeHighlight}
+                onRepairHighlights={repairHighlights}
+                saved={activeFileSaved}
+                onToggleSaved={toggleSavedOnActive}
+                onRemoveSaved={removeSaved}
+                pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
+                onSavedShown={clearPendingSaved}
+                onHome={goHome}
+                onShareFile={shareActiveFile}
+                onAskAi={askAiFromSelection}
+                readingMode={readingMode}
+                workspaceId={workspaceId}
+                workspaceRevision={workspaceRevision}
+                workspaceFiles={files}
+                workspaceName={workspaceNameRef.current}
+                onOpenArtifact={openEmbeddedArtifact}
+              />
+            ) : activeFile ? (
+              <DocumentViewer
+                file={activeFile}
+                isBookmarked={!!findSaved(saved, { fileId: activeFile.id, kind: "file" })}
+                onToggleBookmark={toggleActiveDocumentSaved}
+                prevFile={prevFile}
+                nextFile={nextFile}
+                onNavFile={navToFile}
+              />
+            ) : null}
+          </main>
         </Suspense>
       </div>
 

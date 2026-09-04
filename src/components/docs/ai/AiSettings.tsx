@@ -241,7 +241,8 @@ function DefaultModel({
         onChange={(e) => {
           const model = e.target.value;
           const provider = allOptions.find((o) => o.model.id === model)?.provider.id as
-            ProviderId | undefined;
+            | ProviderId
+            | undefined;
           onChange({ defaultModel: model, ...(provider ? { defaultProvider: provider } : {}) });
         }}
         className="w-full max-w-sm rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10"

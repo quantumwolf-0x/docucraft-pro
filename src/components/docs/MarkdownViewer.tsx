@@ -71,12 +71,7 @@ import {
   type SavedItem,
 } from "@/lib/saved-items";
 import { locateInSource } from "@/lib/source-locate";
-import {
-  fileSubtopics,
-  headingChunkMap,
-  readingMinutes,
-  wordCount,
-} from "@/lib/markdown-utils";
+import { fileSubtopics, headingChunkMap, readingMinutes, wordCount } from "@/lib/markdown-utils";
 import { InlineArtifact } from "./InlineArtifact";
 import { InteractiveBlock } from "./InteractiveBlock";
 import {
@@ -239,57 +234,69 @@ function MarkdownViewerImpl({
     (content: string) => onContentChange(file.id, content),
     [onContentChange, file.id],
   );
-  const leaveEditMode = useCallback((cursorIndex?: number) => {
-    setEditMode(false);
-    if (cursorIndex !== undefined) {
-      const chunks = fileSubtopics(file);
-      if (chunks.length > 0) {
-        let currentLength = 0;
-        let targetChunk = chunks[0];
-        for (const chunk of chunks) {
-          if (cursorIndex >= currentLength && cursorIndex <= currentLength + chunk.content.length) {
-            targetChunk = chunk;
-            break;
+  const leaveEditMode = useCallback(
+    (cursorIndex?: number) => {
+      setEditMode(false);
+      if (cursorIndex !== undefined) {
+        const chunks = fileSubtopics(file);
+        if (chunks.length > 0) {
+          let currentLength = 0;
+          let targetChunk = chunks[0];
+          for (const chunk of chunks) {
+            if (
+              cursorIndex >= currentLength &&
+              cursorIndex <= currentLength + chunk.content.length
+            ) {
+              targetChunk = chunk;
+              break;
+            }
+            currentLength += chunk.content.length + 1;
           }
-          currentLength += chunk.content.length + 1;
-        }
-        if (singleMode) {
-          setTimeout(() => {
-            const el = document.getElementById(targetChunk.id);
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }, 100);
-        } else {
-          onNav(file.id, targetChunk.id);
+          if (singleMode) {
+            setTimeout(() => {
+              const el = document.getElementById(targetChunk.id);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 100);
+          } else {
+            onNav(file.id, targetChunk.id);
+          }
         }
       }
-    }
-  }, [file, singleMode, onNav]);
-  const cancelEdit = useCallback((cursorIndex?: number) => {
-    onContentChange(file.id, originalContentRef.current);
-    setEditMode(false);
-    if (cursorIndex !== undefined) {
-      const chunks = fileSubtopics(file);
-      if (chunks.length > 0) {
-        let currentLength = 0;
-        let targetChunk = chunks[0];
-        for (const chunk of chunks) {
-          if (cursorIndex >= currentLength && cursorIndex <= currentLength + chunk.content.length) {
-            targetChunk = chunk;
-            break;
+    },
+    [file, singleMode, onNav],
+  );
+  const cancelEdit = useCallback(
+    (cursorIndex?: number) => {
+      onContentChange(file.id, originalContentRef.current);
+      setEditMode(false);
+      if (cursorIndex !== undefined) {
+        const chunks = fileSubtopics(file);
+        if (chunks.length > 0) {
+          let currentLength = 0;
+          let targetChunk = chunks[0];
+          for (const chunk of chunks) {
+            if (
+              cursorIndex >= currentLength &&
+              cursorIndex <= currentLength + chunk.content.length
+            ) {
+              targetChunk = chunk;
+              break;
+            }
+            currentLength += chunk.content.length + 1;
           }
-          currentLength += chunk.content.length + 1;
-        }
-        if (singleMode) {
-          setTimeout(() => {
-            const el = document.getElementById(targetChunk.id);
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }, 100);
-        } else {
-          onNav(file.id, targetChunk.id);
+          if (singleMode) {
+            setTimeout(() => {
+              const el = document.getElementById(targetChunk.id);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 100);
+          } else {
+            onNav(file.id, targetChunk.id);
+          }
         }
       }
-    }
-  }, [onContentChange, file.id, file, singleMode, onNav]);
+    },
+    [onContentChange, file.id, file, singleMode, onNav],
+  );
   const enterEditMode = useCallback(() => {
     originalContentRef.current = file.content;
     setEditMode(true);
@@ -321,9 +328,9 @@ function MarkdownViewerImpl({
   <body>
     ${html}
   </body>
-</html>`
+</html>`,
       ],
-      { type: "text/html" }
+      { type: "text/html" },
     );
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -349,10 +356,7 @@ function MarkdownViewerImpl({
     }
   };
 
-  const allChunks = useMemo(
-    () => fileSubtopics(file),
-    [file.subtopics, file.content, file.name],
-  );
+  const allChunks = useMemo(() => fileSubtopics(file), [file.subtopics, file.content, file.name]);
 
   // A selected heading may be a nested ##/### that lives inside a # page rather
   // than being a page itself; resolve it to its parent # chunk id.
@@ -607,7 +611,8 @@ function MarkdownViewerImpl({
   useEffect(() => {
     const container = contentRef.current;
     const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
-      Map<string, any> | undefined;
+      | Map<string, any>
+      | undefined;
     if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
     // Mid-edit the rendered document is a moving target (the draft autosaves
     // every 400ms). Re-anchoring waits for the reader to leave the editor.
@@ -986,14 +991,7 @@ function MarkdownViewerImpl({
     // it rebuilt every renderer on each highlight change, re-rendering the whole
     // markdown tree (the entire document, in single-page mode).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      highlightQuery,
-      workspaceId,
-      workspaceRevision,
-      workspaceFiles,
-      workspaceName,
-      onOpenArtifact,
-    ],
+    [highlightQuery, workspaceId, workspaceRevision, workspaceFiles, workspaceName, onOpenArtifact],
   );
 
   return (
@@ -1025,43 +1023,41 @@ function MarkdownViewerImpl({
               <>
                 <Select value={activeChunk.id} onValueChange={(val) => onNav(file.id, val)}>
                   <SelectTrigger className="w-fit min-w-0 max-w-full h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
-                    <span className="truncate min-w-0 text-left">
-                      {stripExt(file.name)}
-                    </span>
+                    <span className="truncate min-w-0 text-left">{stripExt(file.name)}</span>
                   </SelectTrigger>
-                <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
-                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
-                    Sections
-                  </div>
-                  <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
-                    {allChunks.map((chunk) => {
-                      // Cached word count — this list is rebuilt on every render
-                      // of the viewer, and scanning every section's text each
-                      // time was O(document) for a dropdown that is usually shut.
-                      const readingMin = readingMinutes(chunk.content);
-                      return (
-                        <SelectItem
-                          key={chunk.id}
-                          value={chunk.id}
-                          className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
-                        >
-                          <div className="flex w-full items-center justify-between gap-4">
-                            <span className="truncate">
-                              {chunk.title.length > 20
-                                ? chunk.title.substring(0, 20) + "..."
-                                : chunk.title}
-                            </span>
-                            <span className="shrink-0 text-xs text-muted-foreground">
-                              {readingMin} min
-                            </span>
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
-                  </div>
-                </SelectContent>
-              </Select>
-            </>
+                  <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
+                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
+                      Sections
+                    </div>
+                    <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
+                      {allChunks.map((chunk) => {
+                        // Cached word count — this list is rebuilt on every render
+                        // of the viewer, and scanning every section's text each
+                        // time was O(document) for a dropdown that is usually shut.
+                        const readingMin = readingMinutes(chunk.content);
+                        return (
+                          <SelectItem
+                            key={chunk.id}
+                            value={chunk.id}
+                            className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
+                          >
+                            <div className="flex w-full items-center justify-between gap-4">
+                              <span className="truncate">
+                                {chunk.title.length > 20
+                                  ? chunk.title.substring(0, 20) + "..."
+                                  : chunk.title}
+                              </span>
+                              <span className="shrink-0 text-xs text-muted-foreground">
+                                {readingMin} min
+                              </span>
+                            </div>
+                          </SelectItem>
+                        );
+                      })}
+                    </div>
+                  </SelectContent>
+                </Select>
+              </>
             )
           }
           actions={
@@ -1118,15 +1114,12 @@ function MarkdownViewerImpl({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem onClick={onToggleBookmark}>
-                      <Star className={`mr-2 h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
+                      <Star
+                        className={`mr-2 h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`}
+                      />
                       {isBookmarked ? "Unstar" : "Star"}
                     </DropdownMenuItem>
-                    {!editMode && onShareFile && (
-                      <DropdownMenuItem onClick={onShareFile}>
-                        <Share className="mr-2 h-4 w-4" />
-                        Share this file
-                      </DropdownMenuItem>
-                    )}
+
                     {!editMode && onToggleReadingMode && (
                       <DropdownMenuItem onClick={onToggleReadingMode}>
                         <Files className="mr-2 h-4 w-4" />
@@ -1152,105 +1145,201 @@ function MarkdownViewerImpl({
           }
         />
       )}
-      <div ref={containerRef} className="relative flex-1 overflow-y-auto transition-colors duration-500">
-      <Spotlight active={presentMode} />
-      {presentMode && (
-        <div className="fixed top-4 left-4 z-50 flex items-center gap-1 rounded-full border border-border/20 bg-background/30 p-1 backdrop-blur-md opacity-30 hover:opacity-100 transition-opacity">
-          <button
-            onClick={() => singleMode ? prevFile && onNav(prevFile.id, null) : prevChunk && onNav(file.id, prevChunk.id)}
-            disabled={singleMode ? !prevFile : !prevChunk}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <button
-            onClick={() => singleMode ? nextFile && onNav(nextFile.id, null) : nextChunk && onNav(file.id, nextChunk.id)}
-            disabled={singleMode ? !nextFile : !nextChunk}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <ChevronRight className="h-5 w-5" />
-          </button>
-        </div>
-      )}
-
-      {menu &&
-        !editMode &&
-        // Portalled to <body> on purpose. The popover is positioned in viewport
-        // coordinates, and any transformed ancestor (the GSAP entrance tween,
-        // a backdrop-filter, a `will-change`) would silently become its
-        // containing block and throw those coordinates off by the scroller's
-        // height — which is what hid it entirely in single-page mode.
-        createPortal(
-          <div
-            ref={menuRef}
-            className="fixed z-(--z-dropdown) w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
-            style={{
-              top: Math.min(Math.max(56, menu.y - 12), window.innerHeight - 24),
-              left: Math.min(Math.max(132, menu.x), window.innerWidth - 132),
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-          <div className="mb-2 flex items-center justify-between px-1">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {menu.mode === "create" ? "Highlight" : "Edit highlight"}
-            </span>
+      <div
+        ref={containerRef}
+        className="relative flex-1 overflow-y-auto transition-colors duration-500"
+      >
+        <Spotlight active={presentMode} />
+        {presentMode && (
+          <div className="fixed top-4 left-4 z-50 flex items-center gap-1 rounded-full border border-border/20 bg-background/30 p-1 backdrop-blur-md opacity-30 hover:opacity-100 transition-opacity">
             <button
-              onClick={() => setMenu(null)}
-              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-              aria-label="Close"
+              onClick={() =>
+                singleMode
+                  ? prevFile && onNav(prevFile.id, null)
+                  : prevChunk && onNav(file.id, prevChunk.id)
+              }
+              disabled={singleMode ? !prevFile : !prevChunk}
+              className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
             >
-              <X className="h-3.5 w-3.5" />
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() =>
+                singleMode
+                  ? nextFile && onNav(nextFile.id, null)
+                  : nextChunk && onNav(file.id, nextChunk.id)
+              }
+              disabled={singleMode ? !nextFile : !nextChunk}
+              className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <ChevronRight className="h-5 w-5" />
             </button>
           </div>
+        )}
 
-          {menu.mode === "create" && onAskAi && (
-            <div className="mb-2 border-b border-border pb-2">
-              <div className="mb-1.5 flex items-center gap-1 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                <Sparkles className="h-3 w-3" /> Ask AI
+        {menu &&
+          !editMode &&
+          // Portalled to <body> on purpose. The popover is positioned in viewport
+          // coordinates, and any transformed ancestor (the GSAP entrance tween,
+          // a backdrop-filter, a `will-change`) would silently become its
+          // containing block and throw those coordinates off by the scroller's
+          // height — which is what hid it entirely in single-page mode.
+          createPortal(
+            <div
+              ref={menuRef}
+              className="fixed z-(--z-dropdown) w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
+              style={{
+                top: Math.min(Math.max(56, menu.y - 12), window.innerHeight - 24),
+                left: Math.min(Math.max(132, menu.x), window.innerWidth - 132),
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="mb-2 flex items-center justify-between px-1">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  {menu.mode === "create" ? "Highlight" : "Edit highlight"}
+                </span>
+                <button
+                  onClick={() => setMenu(null)}
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  aria-label="Close"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <div className="flex flex-wrap gap-1 px-1">
-                {[
-                  { label: "Ask AI", action: undefined },
-                  { label: "Summarize", action: "summary" },
-                  { label: "Explain", action: "explain" },
-                  { label: "Notes", action: "notes" },
-                  { label: "Mermaid", action: "mermaid" },
-                  { label: "Rewrite", action: "rewrite" },
-                ].map((item) => (
+
+              {menu.mode === "create" && onAskAi && (
+                <div className="mb-2 border-b border-border pb-2">
+                  <div className="mb-1.5 flex items-center gap-1 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    <Sparkles className="h-3 w-3" /> Ask AI
+                  </div>
+                  <div className="flex flex-wrap gap-1 px-1">
+                    {[
+                      { label: "Ask AI", action: undefined },
+                      { label: "Summarize", action: "summary" },
+                      { label: "Explain", action: "explain" },
+                      { label: "Notes", action: "notes" },
+                      { label: "Mermaid", action: "mermaid" },
+                      { label: "Rewrite", action: "rewrite" },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={() => {
+                          onAskAi({ selection: menu.text, actionId: item.action });
+                          window.getSelection()?.removeAllRanges();
+                          setMenu(null);
+                        }}
+                        className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mb-2 flex items-center gap-1.5 px-1">
+                {HL_COLORS.map((color) => {
+                  const active = menu.mode === "edit" && menu.hl.color === color;
+                  return (
+                    <button
+                      key={color}
+                      aria-label={`Highlight ${color}`}
+                      className={`h-6 w-6 rounded-full transition-transform hover:scale-110 ${
+                        active
+                          ? "ring-2 ring-foreground ring-offset-1 ring-offset-popover"
+                          : "border border-border/60"
+                      }`}
+                      style={{ backgroundColor: color }}
+                      onClick={() => {
+                        if (menu.mode === "create") {
+                          onAddHighlight({
+                            text: menu.text,
+                            color,
+                            label: menu.label.trim() || undefined,
+                            subtopicId: singleMode ? undefined : activeChunk.id,
+                            start: menu.start,
+                            end: menu.end,
+                            prefix: menu.prefix,
+                            suffix: menu.suffix,
+                          });
+                          window.getSelection()?.removeAllRanges();
+                        } else {
+                          onUpdateHighlight(menu.hl.id, { color });
+                        }
+                        setMenu(null);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+
+              <div className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2">
+                <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  value={menu.label}
+                  onChange={(e) => setMenu((m) => (m ? { ...m, label: e.target.value } : m))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      if (menu.mode === "create") {
+                        onAddHighlight({
+                          text: menu.text,
+                          color: HL_COLORS[0],
+                          label: menu.label.trim() || undefined,
+                          subtopicId: singleMode ? undefined : activeChunk.id,
+                          start: menu.start,
+                          end: menu.end,
+                          prefix: menu.prefix,
+                          suffix: menu.suffix,
+                        });
+                        window.getSelection()?.removeAllRanges();
+                      } else {
+                        onUpdateHighlight(menu.hl.id, { label: menu.label.trim() || undefined });
+                      }
+                      setMenu(null);
+                    }
+                  }}
+                  placeholder="Add a label (optional)"
+                  className="w-full bg-transparent py-1.5 text-xs outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+
+              <button
+                onClick={() => inspect(menu.mode === "create" ? menu.text : menu.hl.text)}
+                title="Open the editor with this text selected"
+                className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              >
+                <Crosshair className="h-3.5 w-3.5" /> Inspect in source
+              </button>
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(
+                      menu.mode === "create" ? menu.text : menu.hl.text,
+                    );
+                    setMenu(null);
+                  }}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Copy className="h-3.5 w-3.5" /> Copy
+                </button>
+                {menu.mode === "edit" && (
                   <button
-                    key={item.label}
                     onClick={() => {
-                      onAskAi({ selection: menu.text, actionId: item.action });
-                      window.getSelection()?.removeAllRanges();
+                      onRemoveHighlight(menu.hl.id);
                       setMenu(null);
                     }}
-                    className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
                   >
-                    {item.label}
+                    <Trash2 className="h-3.5 w-3.5" /> Remove
                   </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="mb-2 flex items-center gap-1.5 px-1">
-            {HL_COLORS.map((color) => {
-              const active = menu.mode === "edit" && menu.hl.color === color;
-              return (
-                <button
-                  key={color}
-                  aria-label={`Highlight ${color}`}
-                  className={`h-6 w-6 rounded-full transition-transform hover:scale-110 ${
-                    active
-                      ? "ring-2 ring-foreground ring-offset-1 ring-offset-popover"
-                      : "border border-border/60"
-                  }`}
-                  style={{ backgroundColor: color }}
-                  onClick={() => {
-                    if (menu.mode === "create") {
+                )}
+                {menu.mode === "create" && (
+                  <button
+                    onClick={() => {
                       onAddHighlight({
                         text: menu.text,
-                        color,
+                        color: HL_COLORS[0],
                         label: menu.label.trim() || undefined,
                         subtopicId: singleMode ? undefined : activeChunk.id,
                         start: menu.start,
@@ -1259,230 +1348,151 @@ function MarkdownViewerImpl({
                         suffix: menu.suffix,
                       });
                       window.getSelection()?.removeAllRanges();
-                    } else {
-                      onUpdateHighlight(menu.hl.id, { color });
-                    }
-                    setMenu(null);
-                  }}
-                />
-              );
-            })}
-          </div>
-
-          <div className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2">
-            <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <input
-              value={menu.label}
-              onChange={(e) => setMenu((m) => (m ? { ...m, label: e.target.value } : m))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  if (menu.mode === "create") {
-                    onAddHighlight({
-                      text: menu.text,
-                      color: HL_COLORS[0],
-                      label: menu.label.trim() || undefined,
-                      subtopicId: singleMode ? undefined : activeChunk.id,
-                      start: menu.start,
-                      end: menu.end,
-                      prefix: menu.prefix,
-                      suffix: menu.suffix,
-                    });
-                    window.getSelection()?.removeAllRanges();
-                  } else {
-                    onUpdateHighlight(menu.hl.id, { label: menu.label.trim() || undefined });
-                  }
-                  setMenu(null);
-                }
-              }}
-              placeholder="Add a label (optional)"
-              className="w-full bg-transparent py-1.5 text-xs outline-none placeholder:text-muted-foreground"
-            />
-          </div>
-
-          <button
-            onClick={() => inspect(menu.mode === "create" ? menu.text : menu.hl.text)}
-            title="Open the editor with this text selected"
-            className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-          >
-            <Crosshair className="h-3.5 w-3.5" /> Inspect in source
-          </button>
-
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(menu.mode === "create" ? menu.text : menu.hl.text);
-                setMenu(null);
-              }}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <Copy className="h-3.5 w-3.5" /> Copy
-            </button>
-            {menu.mode === "edit" && (
-              <button
-                onClick={() => {
-                  onRemoveHighlight(menu.hl.id);
-                  setMenu(null);
-                }}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Remove
-              </button>
-            )}
-            {menu.mode === "create" && (
-              <button
-                onClick={() => {
-                  onAddHighlight({
-                    text: menu.text,
-                    color: HL_COLORS[0],
-                    label: menu.label.trim() || undefined,
-                    subtopicId: singleMode ? undefined : activeChunk.id,
-                    start: menu.start,
-                    end: menu.end,
-                    prefix: menu.prefix,
-                    suffix: menu.suffix,
-                  });
-                  window.getSelection()?.removeAllRanges();
-                  setMenu(null);
-                }}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90"
-              >
-                Highlight
-              </button>
-            )}
-          </div>
-          </div>,
-          document.body,
-        )}
-
-      {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
-
-      <div className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}>
-        <article
-          onMouseUp={() => openCreateMenu()}
-          onContextMenu={onContextMenu}
-          className="docs-prose mx-auto min-w-0 flex-1"
-        >
-          {!singleMode && (
-            <div className="mb-8">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl wrap-break-word mb-1">
-                    {activeChunk.title}
-                  </h1>
-                  <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                    <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {editMode ? (
-            <MarkdownEditor
-              ref={editorRef}
-              fileId={file.id}
-              initialContent={file.content}
-              onSave={saveDraft}
-              onDone={leaveEditMode}
-              onCancel={cancelEdit}
-              inspectMissed={inspectMissed}
-            />
-          ) : (
-            <div
-              key={singleMode ? "full" : activeChunk.id}
-              ref={contentRef}
-              onClick={onContentClick}
-              className={presentMode ? "animate-in fade-in slide-in-from-bottom-4 duration-500 fill-mode-forwards" : ""}
-            >
-              <SavedContext.Provider value={savedCtx}>
-                <ReactMarkdown
-                  remarkPlugins={remarkPlugins}
-                  rehypePlugins={rehypePlugins}
-                  components={components}
-                >
-                  {markdownSource}
-                </ReactMarkdown>
-              </SavedContext.Provider>
-            </div>
-          )}
-
-          {/* Natural stopping point — quiet acknowledgement, clear next step.
-              Only in paginated mode; single page shows the whole document. */}
-          {!editMode && !singleMode && (
-            <div className="mt-20 border-t border-border pt-10">
-              <div className="flex flex-col items-center gap-6">
-                <div className="w-full max-w-xl">
-                  {nextChunk ? (
-                    <button
-                      onClick={() => onNav(file.id, nextChunk.id)}
-                      className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
-                          Next {chunkIndex + 2}/{allChunks.length}
-                        </span>
-                        <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
-                          {nextChunk.title}
-                        </span>
-                      </span>
-                      <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
-                    </button>
-                  ) : nextFile ? (
-                    <button
-                      onClick={() => onNav(nextFile.id, null)}
-                      className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
-                          Next Chapter
-                        </span>
-                        <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
-                          {stripExt(nextFile.name)}
-                        </span>
-                        {nextReadingMin != null && (
-                          <span className="mt-1 block text-xs font-medium text-muted-foreground">
-                            ≈ {nextReadingMin} min read
-                          </span>
-                        )}
-                      </span>
-                      <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
-                    </button>
-                  ) : (
-                    <div className="flex items-center justify-center rounded-2xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                      You've reached the end.
-                    </div>
-                  )}
-                </div>
-
-                {(prevChunk || prevFile) && (
-                  <button
-                    onClick={() =>
-                      prevChunk
-                        ? onNav(file.id, prevChunk.id)
-                        : prevFile && onNav(prevFile.id, null)
-                    }
-                    className="group flex max-w-full items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                      setMenu(null);
+                    }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90"
                   >
-                    <ArrowLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-1" />
-                    <span className="truncate">
-                      {prevChunk
-                        ? `Previous: ${prevChunk.title}`
-                        : `Previous Chapter: ${prevFile ? stripExt(prevFile.name) : ""}`}
-                    </span>
+                    Highlight
                   </button>
                 )}
               </div>
-            </div>
+            </div>,
+            document.body,
           )}
-        </article>
-      </div>
 
-      <ReadingProgress
-        containerRef={containerRef}
-        contentRef={contentRef}
-        revision={markdownSource}
-        hidden={editMode || presentMode}
-      />
+        {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
+
+        <div className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}>
+          <article
+            onMouseUp={() => openCreateMenu()}
+            onContextMenu={onContextMenu}
+            className="docs-prose mx-auto min-w-0 flex-1"
+          >
+            {!singleMode && (
+              <div className="mb-8">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl wrap-break-word mb-1">
+                      {activeChunk.title}
+                    </h1>
+                    <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {editMode ? (
+              <MarkdownEditor
+                ref={editorRef}
+                fileId={file.id}
+                initialContent={file.content}
+                onSave={saveDraft}
+                onDone={leaveEditMode}
+                onCancel={cancelEdit}
+                inspectMissed={inspectMissed}
+              />
+            ) : (
+              <div
+                key={singleMode ? "full" : activeChunk.id}
+                ref={contentRef}
+                onClick={onContentClick}
+                className={
+                  presentMode
+                    ? "animate-in fade-in slide-in-from-bottom-4 duration-500 fill-mode-forwards"
+                    : ""
+                }
+              >
+                <SavedContext.Provider value={savedCtx}>
+                  <ReactMarkdown
+                    remarkPlugins={remarkPlugins}
+                    rehypePlugins={rehypePlugins}
+                    components={components}
+                  >
+                    {markdownSource}
+                  </ReactMarkdown>
+                </SavedContext.Provider>
+              </div>
+            )}
+
+            {/* Natural stopping point — quiet acknowledgement, clear next step.
+              Only in paginated mode; single page shows the whole document. */}
+            {!editMode && !singleMode && (
+              <div className="mt-20 border-t border-border pt-10">
+                <div className="flex flex-col items-center gap-6">
+                  <div className="w-full max-w-xl">
+                    {nextChunk ? (
+                      <button
+                        onClick={() => onNav(file.id, nextChunk.id)}
+                        className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
+                            Next {chunkIndex + 2}/{allChunks.length}
+                          </span>
+                          <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
+                            {nextChunk.title}
+                          </span>
+                        </span>
+                        <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                      </button>
+                    ) : nextFile ? (
+                      <button
+                        onClick={() => onNav(nextFile.id, null)}
+                        className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
+                            Next Chapter
+                          </span>
+                          <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
+                            {stripExt(nextFile.name)}
+                          </span>
+                          {nextReadingMin != null && (
+                            <span className="mt-1 block text-xs font-medium text-muted-foreground">
+                              ≈ {nextReadingMin} min read
+                            </span>
+                          )}
+                        </span>
+                        <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                      </button>
+                    ) : (
+                      <div className="flex items-center justify-center rounded-2xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                        You've reached the end.
+                      </div>
+                    )}
+                  </div>
+
+                  {(prevChunk || prevFile) && (
+                    <button
+                      onClick={() =>
+                        prevChunk
+                          ? onNav(file.id, prevChunk.id)
+                          : prevFile && onNav(prevFile.id, null)
+                      }
+                      className="group flex max-w-full items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <ArrowLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-1" />
+                      <span className="truncate">
+                        {prevChunk
+                          ? `Previous: ${prevChunk.title}`
+                          : `Previous Chapter: ${prevFile ? stripExt(prevFile.name) : ""}`}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </article>
+        </div>
+
+        <ReadingProgress
+          containerRef={containerRef}
+          contentRef={contentRef}
+          revision={markdownSource}
+          hidden={editMode || presentMode}
+        />
       </div>
     </div>
   );
