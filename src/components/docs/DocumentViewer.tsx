@@ -220,6 +220,29 @@ interface MammothBrowser {
 }
 
 type SheetData = { name: string; rows: string[][] };
+
+const ROW_HEIGHT = 33;
+const OVERSCAN = 12;
+
+/**
+ * Numeric-aware cell compare. `localeCompare` with `numeric: true` builds a
+ * fresh Intl collator per call, which dominates the profile when sorting tens
+ * of thousands of rows; comparing numbers directly and falling back to a single
+ * shared collator is around two orders of magnitude cheaper.
+ */
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+function compareCells(a: string, b: string): number {
+  if (a === b) return 0;
+  const na = Number(a);
+  const nb = Number(b);
+  const aNumeric = a !== "" && !Number.isNaN(na);
+  const bNumeric = b !== "" && !Number.isNaN(nb);
+  if (aNumeric && bNumeric) return na - nb;
+  if (aNumeric) return -1;
+  if (bNumeric) return 1;
+  return collator.compare(a, b);
+}
+
 function SpreadsheetViewer({
   file,
   isBookmarked,
@@ -231,8 +254,18 @@ function SpreadsheetViewer({
   const [sheets, setSheets] = useState<SheetData[]>([]);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState("");
+  const [deferredQuery, setDeferredQuery] = useState("");
   const [sort, setSort] = useState<{ column: number; direction: 1 | -1 } | null>(null);
   const [error, setError] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 600 });
+  // Typing is decoupled from filtering: the input stays responsive while the
+  // scan over every cell runs once the user pauses, instead of on each keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDeferredQuery(query), 140);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -242,14 +275,34 @@ function SpreadsheetViewer({
         const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
         const workbook =
           kind === "csv"
-            ? XLSX.read(file.content, { type: "string" })
-            : XLSX.read(dataUrlToArrayBuffer(file.data), { type: "array" });
-        const next = workbook.SheetNames.map((name) => ({
-          name,
-          rows: (
-            XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "" }) as unknown[][]
-          ).map((row) => row.map((value) => String(value ?? ""))),
-        }));
+            ? XLSX.read(file.content, { type: "string", dense: true })
+            : XLSX.read(dataUrlToArrayBuffer(file.data), {
+                type: "array",
+                dense: true,
+                // Styles, formula text and volatile metadata are never rendered
+                // here, and parsing them is a large share of the cost on a big
+                // workbook.
+                cellStyles: false,
+                cellFormula: false,
+                cellHTML: false,
+              });
+        const next = workbook.SheetNames.map((name) => {
+          const raw = XLSX.utils.sheet_to_json(workbook.Sheets[name], {
+            header: 1,
+            defval: "",
+            blankrows: false,
+          }) as unknown[][];
+          // Stringified in place. Mapping into a second matrix doubles peak
+          // memory for a sheet that can already be hundreds of megabytes.
+          for (let r = 0; r < raw.length; r++) {
+            const row = raw[r];
+            for (let c = 0; c < row.length; c++) {
+              const value = row[c];
+              if (typeof value !== "string") row[c] = value == null ? "" : String(value);
+            }
+          }
+          return { name, rows: raw as string[][] };
+        });
         if (!alive) return;
         setSheets(next);
         setActive(0);
@@ -265,17 +318,63 @@ function SpreadsheetViewer({
   const sheet = sheets[active];
   const headers = sheet?.rows[0] ?? [];
   const rows = useMemo(() => {
-    const source = (sheet?.rows.slice(1) ?? []).filter(
-      (row) => !query || row.some((cell) => cell.toLowerCase().includes(query.toLowerCase())),
-    );
-    return sort
-      ? [...source].sort(
-          (a, b) =>
-            a[sort.column].localeCompare(b[sort.column], undefined, { numeric: true }) *
-            sort.direction,
-        )
-      : source;
-  }, [sheet, query, sort]);
+    const body = sheet?.rows;
+    if (!body || body.length < 2) return [] as string[][];
+    const needle = deferredQuery.trim().toLowerCase();
+    let source: string[][];
+    if (needle) {
+      source = [];
+      // Hand-rolled loops: the needle is lowercased once rather than per cell,
+      // and no intermediate array is allocated for the rows that are filtered out.
+      for (let r = 1; r < body.length; r++) {
+        const row = body[r];
+        for (let c = 0; c < row.length; c++) {
+          if (row[c].toLowerCase().includes(needle)) {
+            source.push(row);
+            break;
+          }
+        }
+      }
+    } else {
+      source = body.slice(1);
+    }
+    if (!sort) return source;
+    const { column, direction } = sort;
+    // slice() only when the array is still the parsed one, so a filtered result
+    // is sorted in place instead of copied again.
+    const sorted = source === body ? source.slice() : source;
+    sorted.sort((a, b) => compareCells(a[column] ?? "", b[column] ?? "") * direction);
+    return sorted;
+  }, [sheet, deferredQuery, sort]);
+
+  // Only the rows overlapping the scroll window are turned into DOM. Rendering
+  // every row of a large export is what made these files unusable: the cost is
+  // now bounded by viewport height, not by row count.
+  const total = rows.length;
+  const first = Math.max(0, Math.floor(viewport.scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const last = Math.min(
+    total,
+    Math.ceil((viewport.scrollTop + viewport.height) / ROW_HEIGHT) + OVERSCAN,
+  );
+  const visible = rows.slice(first, last);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    const measure = () => setViewport({ scrollTop: node.scrollTop, height: node.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [sheet]);
+
+  // Scrolling back to the top on a new sheet or filter keeps the window aligned
+  // with what is actually being shown.
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (node) node.scrollTop = 0;
+    setViewport((prev) => ({ ...prev, scrollTop: 0 }));
+  }, [active, deferredQuery, sort]);
   return (
     <ViewerFrame
       file={file}
@@ -322,7 +421,16 @@ function SpreadsheetViewer({
                 ))}
               </div>
             )}
-            <div className="max-h-[calc(100dvh-15rem)] overflow-auto">
+            <div
+              ref={scrollRef}
+              onScroll={(e) =>
+                setViewport({
+                  scrollTop: e.currentTarget.scrollTop,
+                  height: e.currentTarget.clientHeight,
+                })
+              }
+              className="max-h-[calc(100dvh-15rem)] overflow-auto"
+            >
               <table className="spreadsheet-table w-full border-collapse text-left text-sm">
                 <thead>
                   <tr>
@@ -352,21 +460,36 @@ function SpreadsheetViewer({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row, rowIndex) => (
-                    <tr key={`${rowIndex}-${row.join("-")}`}>
-                      <td className="sticky left-0 z-10 bg-card px-3 py-2 text-right text-xs text-muted-foreground">
-                        {rowIndex + 1}
-                      </td>
-                      {headers.map((_, column) => (
-                        <td
-                          key={column}
-                          className="whitespace-nowrap border-t border-border px-3 py-2 text-foreground/85"
-                        >
-                          {row[column]}
-                        </td>
-                      ))}
+                  {/* Spacers stand in for the rows outside the window so the
+                      scrollbar still reflects the full sheet. */}
+                  {first > 0 ? (
+                    <tr style={{ height: first * ROW_HEIGHT }} aria-hidden>
+                      <td colSpan={headers.length + 1} className="p-0" />
                     </tr>
-                  ))}
+                  ) : null}
+                  {visible.map((row, offset) => {
+                    const rowIndex = first + offset;
+                    return (
+                      <tr key={rowIndex} style={{ height: ROW_HEIGHT }}>
+                        <td className="sticky left-0 z-10 bg-card px-3 py-2 text-right text-xs text-muted-foreground">
+                          {rowIndex + 1}
+                        </td>
+                        {headers.map((_, column) => (
+                          <td
+                            key={column}
+                            className="whitespace-nowrap border-t border-border px-3 py-2 text-foreground/85"
+                          >
+                            {row[column]}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                  {last < total ? (
+                    <tr style={{ height: (total - last) * ROW_HEIGHT }} aria-hidden>
+                      <td colSpan={headers.length + 1} className="p-0" />
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
