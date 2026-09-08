@@ -133,12 +133,12 @@ export function AskAiPanel({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-30 flex lg:z-70 md:landscape:z-70 lg:justify-end md:landscape:justify-end pb-[env(safe-area-inset-bottom)] mb-16 lg:mb-0 md:landscape:mb-0 lg:pb-0 md:landscape:pb-0">
+    <div className="fixed inset-0 z-30 flex lg:z-70 lg:justify-end pb-[env(safe-area-inset-bottom)] mb-16 lg:mb-0 lg:pb-0">
       <div
-        className="absolute inset-0 bg-foreground/20 backdrop-blur-sm hidden lg:block md:landscape:block"
+        className="absolute inset-0 bg-foreground/20 backdrop-blur-sm hidden lg:block"
         onClick={onClose}
       />
-      <aside className="relative flex h-full w-full flex-col bg-background animate-in slide-in-from-right duration-200 lg:max-w-md md:landscape:max-w-md lg:border-l md:landscape:border-l border-border lg:shadow-2xl md:landscape:shadow-2xl">
+      <aside className="relative flex h-full w-full flex-col bg-background animate-in slide-in-from-right duration-200 lg:max-w-md lg:border-l border-border lg:shadow-2xl">
         {/* Header */}
         <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">

@@ -53,7 +53,7 @@ export function WorkspaceSheet({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex h-8 items-center justify-center rounded-md border border-border bg-background px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="inline-flex h-10 min-w-10 items-center justify-center rounded-md border border-border bg-background px-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         title="Workspaces"
         aria-label="Workspaces"
       >
@@ -70,7 +70,7 @@ export function WorkspaceSheet({
           }
         }}
         title="Your workspaces"
-        className="max-h-[78dvh] lg:hidden md:landscape:hidden"
+        className="max-h-[78dvh] lg:hidden"
       >
         <div className="space-y-2 pb-2">
           {(() => {
