@@ -82,19 +82,24 @@
   /*
    * Stacking scale — single source of truth for layering. Higher = closer to
    * the user. Each tier must outrank the one above it in this list, and nothing
-   * in the app may exceed --z-modal.
+   * in the app may exceed --z-menu.
    *   --z-sticky   content sub-headers + toolbars (ViewerHeader, md toolbar)
    *   --z-nav      global app chrome: top header, bottom nav, and their menus
    *                — must sit ABOVE content sub-headers so header menus win
    *   --z-dropdown popovers / dropdowns / tooltips / select menus
    *   --z-overlay  full-screen viewers (lightbox, mermaid, command palette, drop)
-   *   --z-modal    modals + bottom sheets  ← always on top of everything
+   *   --z-modal    modals + bottom sheets
+   *   --z-menu     menus torn out of their container and portaled to <body>.
+   *                Above --z-modal because the sidebar is itself a bottom sheet
+   *                on phones: a row's menu has to clear the sheet it opens from.
+   *                For portaled menus only — never for a whole panel or layer.
    */
   --z-sticky: 40;
   --z-nav: 50;
   --z-dropdown: 60;
   --z-overlay: 100;
   --z-modal: 200;
+  --z-menu: 300;
   /* Default reading font = the device's own system UI font. */
   --font-body:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
@@ -357,16 +362,37 @@
 .docs-prose {
   color: var(--foreground);
   font-family: var(--font-body);
-  font-size: 1.15rem;
+  /* Fluid body size: ~1rem on a 320px phone up to 1.15rem from ~700px on. A
+     fixed 1.15rem was set for desktop and left the smallest screens with only
+     a handful of words per line. */
+  font-size: clamp(1rem, 0.93rem + 0.35vw, 1.15rem);
   line-height: 1.8;
   font-weight: 400;
   letter-spacing: 0.003em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+/* Long unbroken tokens — URLs, hashes, identifiers — must fold rather than
+   push the column wider than the viewport. `anywhere` only breaks when the
+   word genuinely cannot fit, so ordinary prose is unaffected. */
+.docs-prose p,
+.docs-prose li,
+.docs-prose a,
+.docs-prose h1,
+.docs-prose h2,
+.docs-prose h3,
+.docs-prose h4,
+.docs-prose h5,
+.docs-prose h6,
+.docs-prose blockquote,
+.docs-prose td,
+.docs-prose th {
+  overflow-wrap: anywhere;
+}
 /* Cap the reading measure (~68ch) so lines stay easy to track. */
 .docs-prose > * {
   max-width: 68ch;
+  min-width: 0;
 }
 .docs-prose > .docs-table-wrap,
 .docs-prose > pre,
@@ -387,18 +413,20 @@
   line-height: 1.25;
   position: relative;
 }
+/* Headings scale with the viewport too, so the hierarchy stays proportional to
+   the body text instead of dominating a narrow screen. */
 .docs-prose h1 {
-  font-size: 2.25rem;
+  font-size: clamp(1.75rem, 1.35rem + 2vw, 2.25rem);
   margin: 0 0 1.25rem;
 }
 .docs-prose h2 {
-  font-size: 1.6rem;
+  font-size: clamp(1.35rem, 1.15rem + 1vw, 1.6rem);
   margin: 2.5rem 0 1rem;
   padding-bottom: 0.4rem;
   border-bottom: 1px solid var(--border);
 }
 .docs-prose h3 {
-  font-size: 1.25rem;
+  font-size: clamp(1.15rem, 1.05rem + 0.5vw, 1.25rem);
   margin: 2rem 0 0.75rem;
 }
 .docs-prose h4 {
@@ -1096,7 +1124,10 @@
 .docs-savable-mermaid > .docs-save-star:focus-visible {
   opacity: 1;
 }
-@media (max-width: 768px) {
+/* Touch devices have no hover, so the star cannot be revealed by pointing at
+   the block. It stays visible there — but only once it has somewhere to sit
+   that is not on top of the content (see the offsets below). */
+@media (hover: none) {
   .docs-save-star {
     opacity: 1;
   }
@@ -1106,9 +1137,32 @@
   .docs-savable-mermaid > .docs-save-star[data-saved="true"] {
     opacity: 0;
   }
-  .docs-savable-mermaid:hover > .docs-save-star,
   .docs-savable-mermaid:focus-within > .docs-save-star {
     opacity: 1;
+  }
+}
+@media (max-width: 768px) {
+  /* A permanently visible star parked in the top-right corner covered the first
+     table header cell and the code fence's first line. On narrow screens the
+     block gets a gutter of its own above the content and the star sits in it,
+     overlapping nothing. */
+  .docs-savable-table,
+  .docs-savable-code {
+    padding-top: 2.25rem;
+  }
+  .docs-savable-table > .docs-save-star,
+  .docs-savable-code > .docs-save-star {
+    top: 0.25rem;
+    right: 0.25rem;
+  }
+  /* The Copy button owns the code fence's right corner; the star sits beside it. */
+  .docs-savable-code > .docs-save-star {
+    right: 5rem;
+  }
+  /* Comfortable touch target — 1.75rem was under the 36px minimum. */
+  .docs-save-star {
+    height: 2.25rem;
+    width: 2.25rem;
   }
 }
 
