@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 // `xlsx` (~563 kB) and `jszip` (~273 kB) are imported where they are used, not
 // here: a static import put both in the app's main chunk, so every reader
 // downloaded a spreadsheet parser and a zip reader before they could open a
@@ -19,6 +19,9 @@ import {
   ZoomOut,
   RotateCw,
   RefreshCw,
+  Pencil,
+  Network,
+  ListTree,
 } from "lucide-react";
 import type { MdFile } from "@/lib/markdown-utils";
 import {
@@ -28,7 +31,16 @@ import {
   getDocumentKind,
   googleUrl,
 } from "@/lib/document-utils";
-import { ViewerHeader, HeaderTitle, type ViewerNav } from "./ViewerHeader";
+import { buildMindMap } from "@/lib/mindmap";
+import { JsonTree } from "./JsonTree";
+import { ViewerHeader, type ViewerNav } from "./ViewerHeader";
+import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
+
+// Only readers who actually open a mind map pay for the layout engine and its
+// renderer, in keeping with how the spreadsheet and Word viewers load.
+const MindMapView = lazy(() =>
+  import("./MindMapView").then((module) => ({ default: module.MindMapView })),
+);
 
 interface Props {
   file: MdFile;
@@ -41,10 +53,28 @@ interface Props {
   onNavFile?: (fileId: string) => void;
   /** Rendered inside markdown content: strip all chrome, show only the content. */
   embedded?: boolean;
+  /** Persist an edited document. Omitted where the viewer is read-only. */
+  onContentChange?: (fileId: string, content: string) => void;
+  /** Opens the workspace command palette from the header's search field. */
+  onOpenPalette?: () => void;
+  /**
+   * Document the sidebar asked to edit. Editing is entered from the file's
+   * three-dots menu rather than a header button, so the request arrives here
+   * the same way it does for markdown. Cleared through `onStartInEditConsumed`.
+   */
+  startInEditFileId?: string | null;
+  onStartInEditConsumed?: () => void;
 }
 interface GoogleProps extends Props {
   isSlides: boolean;
 }
+
+/**
+ * Document name without its extension, for labels. Unlike the markdown
+ * viewer's version this drops any trailing extension, since this file serves
+ * every document type.
+ */
+const stripExt = (name: string) => name.replace(/\.[^./\\]+$/, "");
 
 /** File-level prev/next for the shared header — used by every non-deck viewer. */
 function useFileNav({
@@ -57,8 +87,10 @@ function useFileNav({
     onNext: () => nextFile && onNavFile?.(nextFile.id),
     prevDisabled: !prevFile || !onNavFile,
     nextDisabled: !nextFile || !onNavFile,
-    prevLabel: "Previous file",
-    nextLabel: "Next file",
+    // The pager names the destination rather than the direction — the arrow
+    // already says which way it goes.
+    prevLabel: prevFile ? `Previous: ${stripExt(prevFile.name)}` : "Previous file",
+    nextLabel: nextFile ? stripExt(nextFile.name) : "Next file",
   };
 }
 
@@ -83,52 +115,54 @@ function DocumentViewerImpl(props: Props) {
 export const DocumentViewer = memo(DocumentViewerImpl);
 
 function ViewerFrame({
-  file,
   children,
   action,
-  icon,
+  navAction,
   isBookmarked,
   onToggleBookmark,
   prevFile,
   nextFile,
   onNavFile,
+  onOpenPalette,
 }: {
-  file: MdFile;
+  /**
+   * Accepted so call sites can keep passing the open document, and to leave the
+   * per-type `icon` prop in place, but the header no longer renders either: the
+   * sidebar marks the active file, so this space belongs to search.
+   */
+  file?: MdFile;
   children: React.ReactNode;
   action?: React.ReactNode;
-  /** File-type glyph shown in the header chip; defaults to a generic document. */
+  navAction?: React.ReactNode;
   icon?: React.ReactNode;
   isBookmarked?: boolean;
   onToggleBookmark?: () => void;
-} & Pick<Props, "prevFile" | "nextFile" | "onNavFile">) {
+} & Pick<Props, "prevFile" | "nextFile" | "onNavFile" | "onOpenPalette">) {
   const nav = useFileNav({ prevFile, nextFile, onNavFile });
   return (
     <section className="min-h-[calc(100dvh-4rem)] bg-background">
       <ViewerHeader
-        nav={nav}
-        center={<HeaderTitle icon={icon ?? <FileText className="h-4 w-4" />} title={file.name} />}
-        actions={
-          <>
-            {onToggleBookmark && (
-              <button
-                type="button"
-                onClick={onToggleBookmark}
-                title={isBookmarked ? "Unstar" : "Star"}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
-              </button>
-            )}
-            {action}
-          </>
-        }
+        navAction={navAction}
+        // Starring and editing live in the file's three-dots menu in the
+        // sidebar, next to the other things you do *to* a document. What stays
+        // here is per-view state — zoom, fullscreen, the mind map — which has
+        // no meaning anywhere else.
+        actions={action}
       />
       {children}
     </section>
   );
 }
 
-function PdfViewer({ file, isBookmarked, onToggleBookmark, prevFile, nextFile, onNavFile }: Props) {
+function PdfViewer({
+  file,
+  isBookmarked,
+  onToggleBookmark,
+  prevFile,
+  nextFile,
+  onNavFile,
+  onOpenPalette,
+}: Props) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     const blob = dataUrlToBlob(file.data, "application/pdf");
@@ -145,6 +179,7 @@ function PdfViewer({ file, isBookmarked, onToggleBookmark, prevFile, nextFile, o
       prevFile={prevFile}
       nextFile={nextFile}
       onNavFile={onNavFile}
+      onOpenPalette={onOpenPalette}
     >
       {url ? (
         <iframe
@@ -166,6 +201,7 @@ function DocxViewer({
   prevFile,
   nextFile,
   onNavFile,
+  onOpenPalette,
 }: Props) {
   const [html, setHtml] = useState("");
   const [error, setError] = useState("");
@@ -200,6 +236,7 @@ function DocxViewer({
       prevFile={prevFile}
       nextFile={nextFile}
       onNavFile={onNavFile}
+      onOpenPalette={onOpenPalette}
     >
       {error ? (
         <ErrorState message={error} />
@@ -250,6 +287,7 @@ function SpreadsheetViewer({
   prevFile,
   nextFile,
   onNavFile,
+  onOpenPalette,
 }: Props) {
   const [sheets, setSheets] = useState<SheetData[]>([]);
   const [active, setActive] = useState(0);
@@ -383,6 +421,7 @@ function SpreadsheetViewer({
       prevFile={prevFile}
       nextFile={nextFile}
       onNavFile={onNavFile}
+      onOpenPalette={onOpenPalette}
     >
       {error ? (
         <ErrorState message={error} />
@@ -500,6 +539,9 @@ function SpreadsheetViewer({
   );
 }
 
+/** How long typing has to pause before a JSON draft is handed to the parent. */
+const JSON_AUTOSAVE_MS = 600;
+
 function JsonViewer({
   file,
   isBookmarked,
@@ -507,8 +549,15 @@ function JsonViewer({
   prevFile,
   nextFile,
   onNavFile,
+  onContentChange,
+  onOpenPalette,
+  startInEditFileId,
+  onStartInEditConsumed,
 }: Props) {
-  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"tree" | "mindmap">("tree");
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(file.content);
+
   const formatted = useMemo(() => {
     try {
       return JSON.stringify(JSON.parse(file.content), null, 2);
@@ -516,7 +565,134 @@ function JsonViewer({
       return file.content;
     }
   }, [file.content]);
+
+  // Parsed once per document, and shared by the tree and the mind map. `null`
+  // means the file isn't valid JSON, in which case only the raw views apply.
+  const parsed = useMemo<{ value: unknown } | null>(() => {
+    try {
+      return { value: JSON.parse(file.content) };
+    } catch {
+      return null;
+    }
+  }, [file.content]);
+
+  // The draft is re-seeded per document rather than per content change, so the
+  // parent echoing an autosave back doesn't clobber what's been typed since.
+  useEffect(() => {
+    setDraft(file.content);
+    setEditing(false);
+    setMode("tree");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file.id]);
+
+  const draftError = useMemo(() => {
+    if (!editing) return null;
+    try {
+      JSON.parse(draft);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Invalid JSON";
+    }
+  }, [draft, editing]);
+
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
+
+  // Autosave, matching the markdown editor: only valid JSON is written back, so
+  // a document is never persisted in a half-typed state.
+  useEffect(() => {
+    if (!editing || draft === file.content) return;
+    try {
+      JSON.parse(draft);
+    } catch {
+      return;
+    }
+    const timer = setTimeout(() => onContentChangeRef.current?.(file.id, draft), JSON_AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [draft, editing, file.content, file.id]);
+
+  const beginEdit = () => {
+    setDraft(formatted);
+    setEditing(true);
+    // The editor is itself the raw view, so there is no separate raw mode to
+    // switch to — only the mind map has to be left behind.
+    setMode("tree");
+  };
+
+  const cancelEdit = () => {
+    setDraft(file.content);
+    setEditing(false);
+  };
+
+  // "Edit" from the file's sidebar menu. Entering the editor is no longer a
+  // header button, so this is how the request arrives.
+  useEffect(() => {
+    if (startInEditFileId !== file.id || editing) return;
+    beginEdit();
+    onStartInEditConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startInEditFileId, file.id]);
+
+  // Back leaves the editor and the mind map, the same as their own exit
+  // controls do — a mode you entered is the last thing you did, so it is the
+  // first thing back should undo.
+  useNavEscape(editing, cancelEdit, ESCAPE_DEPTH.mode);
+  useNavEscape(!editing && mode === "mindmap", () => setMode("tree"), ESCAPE_DEPTH.mode);
+
+  const applyFormat = () => {
+    try {
+      setDraft(JSON.stringify(JSON.parse(draft), null, 2));
+    } catch {
+      // Unparseable drafts are left exactly as typed; the inline error already
+      // says why, and reformatting would have nothing to work from.
+    }
+  };
+
+  // Built once per document. Invalid JSON, a flat shape, or a file too large to
+  // draw all return null, and the action is simply not offered — the viewer
+  // below is unchanged in every one of those cases.
+  const mindMap = useMemo(
+    () => buildMindMap(file.content, file.name.replace(/\.json$/i, "")),
+    [file.content, file.name],
+  );
+
   const lines = formatted.split("\n");
+  const showMap = mode === "mindmap" && Boolean(mindMap);
+
+  // A two-position toggle showing both destinations at once, so the mind map is
+  // visibly available rather than hidden behind a button that renames itself.
+  // Tree is the default and stays on the left.
+  const modeSwitch =
+    !editing && parsed && mindMap ? (
+      <div className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-muted p-0.5">
+        {(
+          [
+            { value: "tree", label: "Tree", icon: ListTree },
+            { value: "mindmap", label: "Mind map", icon: Network },
+          ] as const
+        ).map(({ value, label, icon: Icon }) => {
+          const active = (value === "mindmap") === showMap;
+          return (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setMode(value)}
+              aria-pressed={active}
+              title={value === "mindmap" ? "Show as mind map" : "Show as tree"}
+              className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
+                active
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
+
   return (
     <ViewerFrame
       file={file}
@@ -525,41 +701,89 @@ function JsonViewer({
       prevFile={prevFile}
       nextFile={nextFile}
       onNavFile={onNavFile}
+      onOpenPalette={onOpenPalette}
+      navAction={modeSwitch}
+      action={
+        // Entering the editor is the file's own action and lives in its
+        // sidebar menu. What stays here belongs to the editing session itself:
+        // reformatting the draft, and leaving.
+        editing ? (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={applyFormat}
+              className="flex h-8 items-center rounded-md border border-border px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              Format
+            </button>
+            <button
+              type="button"
+              onClick={cancelEdit}
+              title="Stop editing"
+              className="flex h-8 w-8 items-center justify-center rounded-md bg-accent text-foreground"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+          </div>
+        ) : null
+      }
     >
-      <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
-        <div className="relative mb-4 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Find in JSON"
-            className="w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
-          />
-        </div>
-        <pre className="max-h-[calc(100dvh-13rem)] overflow-auto rounded-xl border border-border bg-[#101722] p-4 text-sm leading-6 text-slate-200">
-          <code>
-            {lines.map((line, index) => (
-              <div
-                key={index}
-                className={
-                  query && line.toLowerCase().includes(query.toLowerCase()) ? "bg-amber-300/20" : ""
-                }
+      {showMap ? (
+        <Suspense fallback={<Loading label="Building mind map" />}>
+          <MindMapView tree={mindMap!} />
+        </Suspense>
+      ) : (
+        <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
+          {editing ? (
+            <div>
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck={false}
+                aria-label="Edit JSON"
+                className={`h-[calc(100dvh-13rem)] w-full resize-none rounded-xl border bg-[#101722] p-4 font-mono text-sm leading-6 text-slate-200 outline-none focus:ring-2 ${
+                  draftError
+                    ? "border-destructive focus:ring-destructive/20"
+                    : "border-border focus:ring-primary/20"
+                }`}
+              />
+              <p
+                className={`mt-2 text-xs ${draftError ? "text-destructive" : "text-muted-foreground"}`}
+                role={draftError ? "alert" : undefined}
               >
-                <span className="mr-5 inline-block w-7 select-none text-right text-slate-500">
-                  {index + 1}
-                </span>
-                {line}
-              </div>
-            ))}
-          </code>
-        </pre>
-      </div>
+                {draftError ?? "Valid JSON — changes save automatically."}
+              </p>
+            </div>
+          ) : parsed ? (
+            <JsonTree value={parsed.value} />
+          ) : (
+            <pre className="max-h-[calc(100dvh-13rem)] overflow-auto rounded-xl border border-border bg-[#101722] p-4 text-sm leading-6 text-slate-200">
+              <code>
+                {lines.map((line, index) => (
+                  <div key={index}>
+                    <span className="mr-5 inline-block w-7 select-none text-right text-slate-500">
+                      {index + 1}
+                    </span>
+                    {line}
+                  </div>
+                ))}
+              </code>
+            </pre>
+          )}
+        </div>
+      )}
     </ViewerFrame>
   );
 }
 
 type Slide = { number: number; title: string; text: string };
-function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: Props) {
+function PresentationViewer({
+  file,
+  isBookmarked,
+  onToggleBookmark,
+  embedded,
+  onOpenPalette,
+}: Props) {
   const [slides, setSlides] = useState<Slide[]>([]);
   const [current, setCurrent] = useState(0);
   const [error, setError] = useState("");
@@ -579,6 +803,10 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
       document.exitFullscreen?.();
     }
   };
+
+  // Back takes the deck out of fullscreen before it leaves the document, so a
+  // presenting reader is not dropped straight out of what they were showing.
+  useNavEscape(isFullscreen, () => void document.exitFullscreen?.(), ESCAPE_DEPTH.mode);
 
   useEffect(() => {
     setSlides([]);
@@ -703,31 +931,12 @@ function PresentationViewer({ file, isBookmarked, onToggleBookmark, embedded }: 
       className="presentation-shell min-h-[calc(100dvh-4rem)] bg-background text-foreground"
     >
       <ViewerHeader
-        nav={{
-          onPrev: goPrev,
-          onNext: goNext,
-          prevDisabled: current <= 0,
-          nextDisabled: current >= slides.length - 1,
-          prevLabel: "Previous slide",
-          nextLabel: "Next slide",
-        }}
-        center={<HeaderTitle icon={<Presentation className="h-4 w-4" />} title={file.name} />}
         actions={
           <>
             {slides.length > 0 && (
               <span className="min-w-12 text-center text-xs text-muted-foreground tabular-nums">
                 {current + 1} / {slides.length}
               </span>
-            )}
-            {onToggleBookmark && (
-              <button
-                type="button"
-                onClick={onToggleBookmark}
-                title={isBookmarked ? "Unstar" : "Star"}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
-              </button>
             )}
             <button
               onClick={toggleFullscreen}
@@ -778,6 +987,7 @@ function GoogleViewer({
   prevFile,
   nextFile,
   onNavFile,
+  onOpenPalette,
 }: GoogleProps) {
   const url = googleUrl(file.content);
   const preview = url?.replace(/\/edit(?:\?.*)?$/, "/preview");
@@ -789,6 +999,7 @@ function GoogleViewer({
       prevFile={prevFile}
       nextFile={nextFile}
       onNavFile={onNavFile}
+      onOpenPalette={onOpenPalette}
     >
       {preview ? (
         <iframe
@@ -812,6 +1023,7 @@ function ImageViewer({
   prevFile,
   nextFile,
   onNavFile,
+  onOpenPalette,
 }: Props) {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -836,6 +1048,10 @@ function ImageViewer({
       document.exitFullscreen?.();
     }
   };
+
+  // Back steps out of fullscreen first, leaving the reader on the image rather
+  // than on whatever they were looking at before it.
+  useNavEscape(isFullscreen, () => void document.exitFullscreen?.(), ESCAPE_DEPTH.mode);
 
   // Prefer the stored data URL; fall back to inline text (data:/http) so legacy
   // saves and linked images still render. SVG, GIF, WebP, AVIF, etc. all ride
@@ -904,6 +1120,7 @@ function ImageViewer({
         prevFile={prevFile}
         nextFile={nextFile}
         onNavFile={onNavFile}
+        onOpenPalette={onOpenPalette}
         action={
           <div className="flex items-center gap-1">
             <IconBtn label="Zoom out" onClick={() => zoomBy(1 / 1.25)} disabled={!src || broken}>
@@ -1011,6 +1228,7 @@ function UnknownViewer({
   prevFile,
   nextFile,
   onNavFile,
+  onOpenPalette,
 }: Props) {
   return (
     <ViewerFrame
@@ -1020,6 +1238,7 @@ function UnknownViewer({
       prevFile={prevFile}
       nextFile={nextFile}
       onNavFile={onNavFile}
+      onOpenPalette={onOpenPalette}
     >
       <ErrorState message="This file was uploaded successfully, but this browser does not have a previewer for its format yet." />
     </ViewerFrame>

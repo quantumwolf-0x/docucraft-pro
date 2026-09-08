@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { isEditableTarget, hasModKey, modKeyLabel } from "@/lib/keyboard";
 import {
   ChevronRight,
@@ -6,13 +7,16 @@ import {
   MoreVertical,
   Trash2,
   Pencil,
+  SquarePen,
   GripVertical,
   Check,
   Plus,
   Highlighter,
   Sparkles,
-  Search,
   PanelLeft,
+  Search,
+  ArrowLeft,
+  ArrowRight,
   FileText,
   FileType,
   FileSpreadsheet,
@@ -48,6 +52,7 @@ import type { MdFile, DocumentKind } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
 import { fileLabel, getDocumentKind } from "@/lib/document-utils";
 import { WorkspaceMenu } from "./WorkspaceMenu";
+import { useNavHistory } from "@/hooks/use-nav-history";
 
 // Arc-style "favicon" per file type — a small colored glyph that anchors each
 // row so the list scans by shape, not just text.
@@ -152,6 +157,10 @@ interface Props {
   onAddFiles: () => void;
   onRemoveFile: (id: string) => void;
   onRenameFile: (id: string, newName: string) => void;
+  /** Open a document in the editor. Only offered for editable text documents. */
+  onEditFile?: (id: string) => void;
+  /** Star / unstar a whole document from its row menu. */
+  onToggleFileStar?: (id: string) => void;
   /**
    * Folders the workspace has, flat. Files point at one through `folderId`;
    * anything unfiled stays at the top level under the folder rows.
@@ -221,6 +230,8 @@ function SidebarImpl({
   onAddFiles,
   onRemoveFile,
   onRenameFile,
+  onEditFile,
+  onToggleFileStar,
   folders = [],
   onCreateFile,
   onCreateFolder,
@@ -260,6 +271,18 @@ function SidebarImpl({
   onOpenPalette,
   onToggleSidebar,
 }: Props) {
+  // Back/forward over the workspace's own navigation trail, rendered next to
+  // the sidebar toggle.
+  const navHistory = useNavHistory();
+
+  // Which documents are starred as a whole — the star in each row's menu
+  // reflects this. Section and block stars are excluded: they say nothing about
+  // whether the document itself is starred.
+  const starredFileIds = useMemo(
+    () => new Set(saved.filter((item) => item.kind === "file").map((item) => item.fileId)),
+    [saved],
+  );
+
   // Progressive disclosure: chapters stay collapsed unless the reader opens
   // them; the current chapter is expanded automatically. This keeps the
   // reader from facing hundreds of headings at once.
@@ -318,8 +341,8 @@ function SidebarImpl({
     if (!creatingOpen && !viewMenuOpen) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (!createRef.current?.contains(t)) setCreatingOpen(false);
-      if (!viewMenuRef.current?.contains(t)) setViewMenuOpen(false);
+      if (isOutsideMenu(t, createRef.current)) setCreatingOpen(false);
+      if (isOutsideMenu(t, viewMenuRef.current)) setViewMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -572,6 +595,16 @@ function SidebarImpl({
           </button>
           {!selecting ? (
             <FileMenu
+              onToggleStar={onToggleFileStar ? () => onToggleFileStar(file.id) : undefined}
+              isStarred={starredFileIds.has(file.id)}
+              // The file types with an editor behind them. A PDF or a
+              // spreadsheet has no edit mode to enter, so the item is absent
+              // rather than present and inert.
+              onEdit={
+                onEditFile && (kind === "markdown" || kind === "text" || kind === "json")
+                  ? () => onEditFile(file.id)
+                  : undefined
+              }
               onRename={() => {
                 const newName = window.prompt("Rename file to:", file.name);
                 if (newName && newName !== file.name) {
@@ -579,8 +612,6 @@ function SidebarImpl({
                 }
               }}
               onDelete={() => onRemoveFile(file.id)}
-              onNewFile={onCreateFile ? () => onCreateFile(file.folderId ?? null) : undefined}
-              onNewFolder={onCreateFolder ? promptNewFolder : undefined}
               folders={folders}
               currentFolderId={file.folderId ?? null}
               onMoveToFolder={
@@ -658,134 +689,104 @@ function SidebarImpl({
     <aside className="flex h-full flex-col">
       {docked ? (
         <>
-          {/* Default header: Title + Search */}
-          {(onToggleSidebar || onOpenPalette) && (
-            <div className="flex items-center justify-between gap-2 px-3 pt-3">
-              {onToggleSidebar && (
-                <button
-                  onClick={onToggleSidebar}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  aria-label="Toggle sidebar"
-                  title="Toggle sidebar"
-                >
-                  <PanelLeft className="h-4 w-4" />
-                </button>
-              )}
-              {onOpenPalette && (
-                <button
-                  onClick={onOpenPalette}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  aria-label="Search docs or ask AI..."
-                  title="Search (⌘K)"
-                >
-                  <Search className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          )}
+          {/* Brand row: the product's name owns the top of the rail, with the
+              controls that act on the whole app — search and the collapse
+              toggle — sitting opposite it. */}
+          <div className="flex items-center gap-1 px-4 pt-4">
+            <span className="min-w-0 flex-1 truncate text-xl font-bold tracking-tight text-foreground">
+              Localdox
+            </span>
+            {onOpenPalette && (
+              <button
+                onClick={onOpenPalette}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="Search docs"
+                title="Search docs"
+              >
+                <Search className="h-4.5 w-4.5" />
+              </button>
+            )}
+            {onToggleSidebar && (
+              <button
+                onClick={onToggleSidebar}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="Toggle sidebar"
+                title="Toggle sidebar"
+              >
+                <PanelLeft className="h-4.5 w-4.5" />
+              </button>
+            )}
+          </div>
+
+          {/* History controls. Back and forward act on the workspace as a whole
+              rather than on the open document, so they belong with the chrome
+              here rather than in the viewer's own header. */}
+          <div className="flex items-center gap-1 px-3 pt-2">
+            <button
+              onClick={navHistory.back}
+              disabled={!navHistory.canBack}
+              aria-label={navHistory.backLabel}
+              title={navHistory.backLabel}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <button
+              onClick={navHistory.forward}
+              disabled={!navHistory.canForward}
+              aria-label={navHistory.forwardLabel}
+              title={navHistory.forwardLabel}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
         </>
       ) : null}
 
-      {/* The two ways to grow the workspace, side by side in what used to be
-          the chip row: bringing in documents you already have, and starting an
-          empty one here. Which view the list shows moved to the list header
-          below, where it sits next to the thing it filters. */}
-      <div className="mt-3 border-b border-border p-3 pt-0">
-        <div className="flex w-full min-w-0 items-stretch gap-2">
-          {(onCreateFile || onCreateFolder) && (
-            <div ref={createRef} className="relative min-w-0 flex-1">
-              <button
-                onClick={() => setCreatingOpen((o) => !o)}
-                aria-expanded={creatingOpen}
-                className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <Plus className="h-4 w-4 shrink-0" />
-                <span className="truncate">Create</span>
-              </button>
-
-              {creatingOpen && (
-                <div className="absolute left-0 top-full z-(--z-dropdown) mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-md">
-                  {onCreateFile && (
-                    <button
-                      onClick={() => {
-                        setCreatingOpen(false);
-                        // A file created from here belongs to the workspace
-                        // root; the per-folder menus create inside a folder.
-                        onCreateFile(null);
-                      }}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-                    >
-                      <FilePlus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      File
-                    </button>
-                  )}
-                  {onCreateFolder && (
-                    <button
-                      onClick={() => {
-                        setCreatingOpen(false);
-                        promptNewFolder();
-                      }}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-                    >
-                      <FolderPlus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      Folder
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          <button
-            onClick={onAddFiles}
-            className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <Upload className="h-4 w-4 shrink-0" />
-            <span className="truncate">Upload</span>
-          </button>
-        </div>
-      </div>
-
-      {/* What the list shows. This was a row of All / Grouped / Saved chips;
-          as a labelled dropdown it says which view is active in words and
-          gives the two buttons above it the full width of the sidebar. */}
+      {/* The list's own header: which view is showing, and the one control for
+          adding to it. Create and Upload used to be a pair of full-width
+          buttons above; as a `+` beside the label they take no vertical space
+          and sit next to the list they add to. */}
       {onView && (
-        <div ref={viewMenuRef} className="relative px-3 pb-1 pt-3">
-          <button
-            onClick={() => setViewMenuOpen((o) => !o)}
-            aria-expanded={viewMenuOpen}
-            className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <span className="truncate">{VIEW_LABEL[view.mode]}</span>
-            <ChevronRight
-              className={`h-3.5 w-3.5 shrink-0 opacity-60 transition-transform ${
-                viewMenuOpen ? "rotate-90" : ""
-              }`}
-            />
-          </button>
+        <div className="flex items-center gap-1 px-3 pb-1 pt-3">
+          <div ref={viewMenuRef} className="relative min-w-0 flex-1">
+            <button
+              onClick={() => setViewMenuOpen((o) => !o)}
+              aria-expanded={viewMenuOpen}
+              className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span className="truncate">{VIEW_LABEL[view.mode]}</span>
+              <ChevronRight
+                className={`h-3.5 w-3.5 shrink-0 opacity-60 transition-transform ${
+                  viewMenuOpen ? "rotate-90" : ""
+                }`}
+              />
+            </button>
 
-          {viewMenuOpen && (
-            <div className="absolute left-3 top-full z-(--z-dropdown) mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-md">
-              {VIEW_MODES.map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => {
-                    onView({ ...view, mode });
-                    setViewMenuOpen(false);
-                  }}
-                  aria-pressed={view.mode === mode}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent ${
-                    view.mode === mode ? "text-foreground" : "text-muted-foreground"
-                  }`}
-                >
-                  <Check
-                    className={`h-3.5 w-3.5 shrink-0 ${view.mode === mode ? "" : "opacity-0"}`}
+            {viewMenuOpen && (
+              <MenuPanel align="left">
+                {VIEW_MODES.map((mode) => (
+                  <MenuItem
+                    key={mode}
+                    icon={Check}
+                    iconClassName={view.mode === mode ? "" : "opacity-0"}
+                    label={VIEW_LABEL[mode]}
+                    onClick={() => {
+                      onView({ ...view, mode });
+                      setViewMenuOpen(false);
+                    }}
                   />
-                  {VIEW_LABEL[mode]}
-                </button>
-              ))}
-            </div>
-          )}
+                ))}
+              </MenuPanel>
+            )}
+          </div>
+
+          <AddMenu
+            onCreateFile={onCreateFile ? () => onCreateFile(null) : undefined}
+            onCreateFolder={onCreateFolder ? promptNewFolder : undefined}
+            onUpload={onAddFiles}
+          />
         </div>
       )}
 
@@ -1011,7 +1012,7 @@ function GroupActionMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (isOutsideMenu(e.target as Node, rootRef.current)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", onDown);
@@ -1035,7 +1036,7 @@ function GroupActionMenu({
         <MoreVertical className="h-4 w-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-(--z-dropdown) mt-1 w-52 rounded-md border border-border bg-popover p-1 shadow-md">
+        <MenuPanel>
           {/* Also bound to Cmd/Ctrl+A while multi-select is on; shown here so
               the shortcut is discoverable rather than folklore. */}
           <button
@@ -1115,17 +1116,18 @@ function GroupActionMenu({
           >
             Cancel Selection
           </button>
-        </div>
+        </MenuPanel>
       )}
     </div>
   );
 }
 
 function FileMenu({
+  onToggleStar,
+  isStarred,
+  onEdit,
   onRename,
   onDelete,
-  onNewFile,
-  onNewFolder,
   folders = [],
   currentFolderId = null,
   onMoveToFolder,
@@ -1137,11 +1139,13 @@ function FileMenu({
   onToggleReorder,
   onSelectMode,
 }: {
+  /** Star / unstar this document. */
+  onToggleStar?: () => void;
+  isStarred?: boolean;
+  /** Open this document in the editor. Absent for non-editable file types. */
+  onEdit?: () => void;
   onRename: () => void;
   onDelete: () => void;
-  /** Create a blank document beside this one (same folder). */
-  onNewFile?: () => void;
-  onNewFolder?: () => void;
   folders?: SidebarFolder[];
   currentFolderId?: string | null;
   onMoveToFolder?: (folderId: string | null) => void;
@@ -1165,7 +1169,7 @@ function FileMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (isOutsideMenu(e.target as Node, rootRef.current)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", onDown);
@@ -1189,212 +1193,408 @@ function FileMenu({
         <MoreVertical className="h-4 w-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-(--z-dropdown) mt-1 w-52 rounded-md border border-border bg-popover p-1 shadow-md">
-          {(onNewFile || onNewFolder) && (
-            <>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSubmenu((s) => (s === "new" ? null : "new"));
-                }}
-                aria-expanded={submenu === "new"}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-              >
-                <Plus className="h-3 w-3" />
-                New
-                <ChevronRight
-                  className={`ml-auto h-3 w-3 transition-transform ${
-                    submenu === "new" ? "rotate-90" : ""
-                  }`}
-                />
-              </button>
-              {submenu === "new" && (
-                <div className="ml-3 border-l border-border pl-1">
-                  {onNewFile && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpen(false);
-                        onNewFile();
-                      }}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-                    >
-                      <FilePlus className="h-3 w-3" />
-                      New File
-                    </button>
-                  )}
-                  {onNewFolder && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpen(false);
-                        onNewFolder();
-                      }}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-                    >
-                      <FolderPlus className="h-3 w-3" />
-                      New Folder
-                    </button>
-                  )}
-                </div>
-              )}
-              <div className="my-1 h-px bg-border" />
-            </>
-          )}
-          {onMoveToFolder && folders.length > 0 && (
-            <>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSubmenu((s) => (s === "move" ? null : "move"));
-                }}
-                aria-expanded={submenu === "move"}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-              >
-                <FolderInput className="h-3 w-3" />
-                Move to
-                <ChevronRight
-                  className={`ml-auto h-3 w-3 transition-transform ${
-                    submenu === "move" ? "rotate-90" : ""
-                  }`}
-                />
-              </button>
-              {submenu === "move" && (
-                <div className="ml-3 max-h-52 overflow-y-auto border-l border-border pl-1">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setOpen(false);
-                      onMoveToFolder(null);
-                    }}
-                    disabled={currentFolderId === null}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
-                  >
-                    <FileText className="h-3 w-3" />
-                    Top level
-                  </button>
-                  {folders.map((folder) => (
-                    <button
-                      key={folder.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpen(false);
-                        onMoveToFolder(folder.id);
-                      }}
-                      disabled={currentFolderId === folder.id}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent"
-                    >
-                      <Folder className="h-3 w-3" />
-                      <span className="truncate">{folder.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className="my-1 h-px bg-border" />
-            </>
-          )}
-          {onToggleReorder && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                onToggleReorder();
-              }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-            >
-              {reordering ? <Check className="h-3 w-3" /> : <GripVertical className="h-3 w-3" />}
-              {reordering ? "Done reordering" : "Reorder"}
-            </button>
-          )}
-          {onToggleReorder && <div className="my-1 h-px bg-border" />}
-          {onSelectMode && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                onSelectMode();
-              }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-            >
-              <CheckSquare className="h-3 w-3" />
-              Select
-            </button>
-          )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-              onRename();
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-          >
-            <Pencil className="h-3 w-3" />
-            Rename
-          </button>
+        <MenuPanel>
+          {/* What you do with the document as an object. */}
           {onShare && (
-            <button
+            <MenuItem
+              icon={Share2}
+              label="Share link"
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);
                 onShare();
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-            >
-              <Share2 className="h-3 w-3" />
-              Share link
-            </button>
+            />
           )}
           {onDownload && (
-            <button
+            <MenuItem
+              icon={Download}
+              label="Download"
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);
                 onDownload();
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-            >
-              <Download className="h-3 w-3" />
-              Download
-            </button>
+            />
+          )}
+          <MenuItem
+            icon={Pencil}
+            label="Rename"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onRename();
+            }}
+          />
+          {onEdit && (
+            <MenuItem
+              icon={SquarePen}
+              label="Edit"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onEdit();
+              }}
+            />
+          )}
+
+          <MenuSeparator />
+
+          {/* State you put the document into — and finally removing it. */}
+          {onToggleStar && (
+            <MenuItem
+              icon={Star}
+              iconClassName={isStarred ? "fill-gold text-gold" : ""}
+              label={isStarred ? "Unstar" : "Star"}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onToggleStar();
+              }}
+            />
           )}
           {onShowHighlights && (
-            <button
+            <MenuItem
+              icon={Highlighter}
+              label="See highlights"
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);
                 onShowHighlights();
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-            >
-              <Highlighter className="h-3 w-3" />
-              See Highlights
-            </button>
+            />
           )}
           {onArchive && (
-            <button
+            <MenuItem
+              icon={Archive}
+              label="Archive"
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);
                 onArchive();
               }}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent"
-            >
-              <Archive className="h-3 w-3" />
-              Archive
-            </button>
+            />
           )}
-          <button
+          <MenuItem
+            icon={Trash2}
+            label="Delete"
+            destructive
             onClick={(e) => {
               e.stopPropagation();
               setOpen(false);
               onDelete();
             }}
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-destructive hover:bg-accent/50"
+          />
+
+          {/* How the list behaves, and where this file sits in it. */}
+          {(onToggleReorder || onSelectMode || (onMoveToFolder && folders.length > 0)) && (
+            <MenuSeparator />
+          )}
+          {onToggleReorder && (
+            <MenuItem
+              icon={reordering ? Check : GripVertical}
+              label={reordering ? "Done reordering" : "Reorder"}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onToggleReorder();
+              }}
+            />
+          )}
+          {onSelectMode && (
+            <MenuItem
+              icon={CheckSquare}
+              label="Select"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onSelectMode();
+              }}
+            />
+          )}
+          {onMoveToFolder && folders.length > 0 && (
+            <>
+              <MenuItem
+                icon={FolderInput}
+                label="Move to folder"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSubmenu((sub) => (sub === "move" ? null : "move"));
+                }}
+                trailing={
+                  <ChevronRight
+                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                      submenu === "move" ? "rotate-90" : ""
+                    }`}
+                  />
+                }
+              />
+              {submenu === "move" && (
+                <div className="ml-3 max-h-52 overflow-y-auto border-l border-border pl-1">
+                  <MenuItem
+                    icon={FileText}
+                    label="Top level"
+                    disabled={currentFolderId === null}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpen(false);
+                      onMoveToFolder(null);
+                    }}
+                  />
+                  {folders.map((folder) => (
+                    <MenuItem
+                      key={folder.id}
+                      icon={Folder}
+                      label={folder.name}
+                      disabled={currentFolderId === folder.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpen(false);
+                        onMoveToFolder(folder.id);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </MenuPanel>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The shared look for every popover menu in the sidebar — a file row's
+ * three-dots menu, a folder row's, and the `+` menu.
+ *
+ * Rows are a comfortable tap size with a full-size icon rather than the cramped
+ * 12px glyphs these menus used to use, and related actions sit in groups
+ * between separators instead of running together as one undifferentiated list.
+ */
+function MenuItem({
+  icon: Icon,
+  label,
+  onClick,
+  destructive,
+  disabled,
+  trailing,
+  iconClassName,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: (e: React.MouseEvent) => void;
+  destructive?: boolean;
+  disabled?: boolean;
+  /** Rendered at the end of the row — a chevron for a submenu, say. */
+  trailing?: React.ReactNode;
+  iconClassName?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
+        destructive ? "text-destructive hover:bg-destructive/10" : "text-foreground hover:bg-accent"
+      }`}
+    >
+      <Icon className={`h-4 w-4 shrink-0 ${iconClassName ?? ""}`} strokeWidth={1.5} />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {trailing}
+    </button>
+  );
+}
+
+/** Divider between groups of menu items. */
+function MenuSeparator() {
+  return <div className="my-1 h-px bg-border" />;
+}
+
+/** Shared shell for the sidebar's popover menus. */
+const MENU_WIDTH = 224; // w-56
+const MENU_GAP = 6;
+const VIEWPORT_MARGIN = 8;
+
+/**
+ * True when a click landed outside both the menu root and its panel. `MenuPanel`
+ * portals the panel to <body>, so it is no longer a DOM descendant of the root —
+ * a plain `root.contains(target)` test would read every click on a menu item as
+ * a click outside and close the menu before the item could fire.
+ */
+function isOutsideMenu(target: Node | null, root: HTMLElement | null) {
+  if (!root || !target) return false;
+  if (root.contains(target)) return false;
+  return !(target instanceof Element && target.closest("[data-sidebar-menu-panel]"));
+}
+
+/**
+ * Menus fly out to the *side* of their trigger rather than dropping below it:
+ * dropped inside the sidebar column a panel covers the rows underneath, hiding
+ * the very list the reader is working in. Opening beside the trigger puts the
+ * panel over the content area and leaves the file list readable.
+ *
+ * It has to be portaled with fixed coordinates to do that. The file list is a
+ * `overflow-y-auto` scroller, and a scroll container clips on *both* axes — an
+ * absolutely positioned panel would be cut off at the sidebar's edge, which is
+ * the very problem this is solving. Measuring the trigger and rendering to
+ * <body> escapes the clip; the trade-off is that the panel must be repositioned
+ * on scroll and resize rather than riding along with its anchor.
+ */
+function MenuPanel({
+  align = "right",
+  children,
+}: {
+  align?: "left" | "right";
+  children: React.ReactNode;
+}) {
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const place = () => {
+      // The anchor sits inside the menu root, so its parent chain reaches the
+      // trigger's positioned wrapper — the box the panel aligns against.
+      const anchor = anchorRef.current?.parentElement;
+      if (!anchor) return;
+      const box = anchor.getBoundingClientRect();
+
+      // Open toward `align`, flipping to the other side only when that would
+      // run past the viewport edge.
+      let left = align === "right" ? box.right + MENU_GAP : box.left - MENU_WIDTH - MENU_GAP;
+      if (left + MENU_WIDTH > window.innerWidth - VIEWPORT_MARGIN)
+        left = box.left - MENU_WIDTH - MENU_GAP;
+      if (left < VIEWPORT_MARGIN) left = VIEWPORT_MARGIN;
+
+      // Top-aligned with the trigger, pulled up if the panel would overhang the
+      // bottom of the screen.
+      const height = panelRef.current?.offsetHeight ?? 0;
+      let top = box.top;
+      if (height && top + height > window.innerHeight - VIEWPORT_MARGIN)
+        top = Math.max(VIEWPORT_MARGIN, window.innerHeight - VIEWPORT_MARGIN - height);
+
+      setPos({ top, left });
+    };
+    place();
+    // `true` catches scrolling in the sidebar's own scroller, not just the page.
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [align, children]);
+
+  return (
+    <>
+      {/* Zero-size marker left in the menu root so the portaled panel can measure it. */}
+      <span ref={anchorRef} className="hidden" aria-hidden />
+      {typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={panelRef}
+            // Tagged so each menu's click-away handler can tell a click on its
+            // own portaled panel from a genuine click outside the menu.
+            data-sidebar-menu-panel
+            className="fixed z-(--z-menu) w-56 rounded-xl border border-border bg-popover p-1.5 shadow-xl"
+            style={{
+              top: pos?.top ?? 0,
+              left: pos?.left ?? 0,
+              // Measured before it is placed; hidden for that first frame so it
+              // never flashes in the corner.
+              visibility: pos ? "visible" : "hidden",
+            }}
           >
-            <Trash2 className="h-3 w-3" />
-            Delete
-          </button>
-        </div>
+            {children}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/**
+ * The `+` menu: the three ways to add to a workspace. Shared by the expanded
+ * sidebar's list header and the collapsed rail, so both offer the same options.
+ */
+export function AddMenu({
+  onCreateFile,
+  onCreateFolder,
+  onUpload,
+  align = "right",
+  className,
+  buttonClassName,
+}: {
+  onCreateFile?: () => void;
+  onCreateFolder?: () => void;
+  onUpload: () => void;
+  align?: "left" | "right";
+  className?: string;
+  buttonClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (isOutsideMenu(e.target as Node, rootRef.current)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className={`relative shrink-0 ${className ?? ""}`}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-label="Add to workspace"
+        title="Add to workspace"
+        className={
+          buttonClassName ??
+          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        }
+      >
+        <Plus className="h-4 w-4" />
+      </button>
+
+      {open && (
+        <MenuPanel align={align}>
+          {onCreateFile && (
+            <MenuItem
+              icon={FilePlus}
+              label="New file"
+              onClick={() => {
+                setOpen(false);
+                onCreateFile();
+              }}
+            />
+          )}
+          {onCreateFolder && (
+            <MenuItem
+              icon={FolderPlus}
+              label="New folder"
+              onClick={() => {
+                setOpen(false);
+                onCreateFolder();
+              }}
+            />
+          )}
+          <MenuItem
+            icon={Upload}
+            label="Upload files"
+            onClick={() => {
+              setOpen(false);
+              onUpload();
+            }}
+          />
+        </MenuPanel>
       )}
     </div>
   );
@@ -1418,7 +1618,7 @@ function FolderMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (isOutsideMenu(e.target as Node, rootRef.current)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", onDown);
@@ -1458,7 +1658,7 @@ function FolderMenu({
         <MoreVertical className="h-4 w-4" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-(--z-dropdown) mt-1 w-48 rounded-md border border-border bg-popover p-1 shadow-md">
+        <MenuPanel>
           {onNewFile && item("New File here", FilePlus, onNewFile)}
           {onNewFolder && item("New Folder", FolderPlus, onNewFolder)}
           {(onNewFile || onNewFolder) && (onRename || onDelete) && (
@@ -1466,7 +1666,7 @@ function FolderMenu({
           )}
           {onRename && item("Rename folder", Pencil, onRename)}
           {onDelete && item("Delete folder", Trash2, onDelete, true)}
-        </div>
+        </MenuPanel>
       )}
     </div>
   );

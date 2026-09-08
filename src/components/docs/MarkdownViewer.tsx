@@ -17,7 +17,6 @@ import {
   Link2,
   ArrowLeft,
   ArrowRight,
-  ChevronRight,
   Clock,
   Pencil,
   Eye,
@@ -33,19 +32,18 @@ import {
   Files,
   Sparkles,
   BookOpen,
-  ChevronLeft,
   Star,
   Share,
   MoreHorizontal,
-  Presentation,
+  Search,
   Crosshair,
   Download,
 } from "lucide-react";
-import { Spotlight } from "./PresentationMode";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ReadingMode } from "@/lib/persistence";
 import { slugify } from "@/lib/markdown-utils";
 import { MermaidBlock } from "./MermaidLazy";
+import { MindMapBlock } from "./MindMapBlock";
 import { ReadingProgress } from "./ReadingProgress";
 import { MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
 import { detectEmbed, EmbedFrame, isVideoUrl, VideoPlayer } from "@/lib/media-embeds";
@@ -92,7 +90,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ViewerHeader, HeaderTitle } from "./ViewerHeader";
+import { ViewerHeader, ViewerPager } from "./ViewerHeader";
+import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
 
 interface Props {
   file: MdFile;
@@ -138,6 +137,8 @@ interface Props {
   workspaceFiles?: MdFile[];
   workspaceName?: string;
   onOpenArtifact?: (fileId: string, workspaceId: string) => void;
+  /** Opens the workspace command palette from the header's search field. */
+  onOpenPalette?: () => void;
   onRemoveFile?: () => void;
   /** Copy a share link to this one file. Hidden when omitted. */
   onShareFile?: () => void;
@@ -216,6 +217,7 @@ function MarkdownViewerImpl({
   workspaceFiles,
   workspaceName,
   onOpenArtifact,
+  onOpenPalette,
   onRemoveFile,
   onShareFile,
   readingMode = "paginated",
@@ -225,7 +227,6 @@ function MarkdownViewerImpl({
   const singleMode = readingMode === "single";
   const containerRef = useRef<HTMLDivElement>(null);
   const [editMode, setEditMode] = useState(false);
-  const [presentMode, setPresentMode] = useState(false);
   // The draft text itself lives inside <MarkdownEditor>. Only the source the
   // editor opened with is kept here, so Cancel can put it back.
   const originalContentRef = useRef(file.content);
@@ -340,21 +341,9 @@ function MarkdownViewerImpl({
     URL.revokeObjectURL(url);
   }, [file.name]);
 
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      setPresentMode(!!document.fullscreenElement);
-    };
-    document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
-  }, []);
-
-  const togglePresentation = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen().catch(console.error);
-    } else {
-      document.exitFullscreen().catch(console.error);
-    }
-  };
+  // Back leaves the editor. Autosave has already written the draft, so this
+  // drops nothing the reader typed.
+  useNavEscape(editMode, () => setEditMode(false), ESCAPE_DEPTH.mode);
 
   const allChunks = useMemo(() => fileSubtopics(file), [file.subtopics, file.content, file.name]);
 
@@ -781,6 +770,17 @@ function MarkdownViewerImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.id]);
 
+  // Edit requested for the document already on screen — the sidebar's "Edit"
+  // item, which now owns that action instead of a header button. The effect
+  // above only fires on a document switch, so this is the case it cannot see.
+  useEffect(() => {
+    if (startInEditFileId !== file.id || editMode) return;
+    setEditMode(true);
+    setPendingSelect({ start: 0, end: 0 });
+    onStartInEditConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startInEditFileId, file.id]);
+
   // Gentle fade/rise when switching documents — reads as a settle, not a flash.
   //
   // Driven by the Web Animations API rather than GSAP: this and one sidebar
@@ -807,11 +807,7 @@ function MarkdownViewerImpl({
   // Autosaving the draft is the editor's own concern now — see MarkdownEditor.
 
   const scrollToTop = () => {
-    if (presentMode && containerRef.current) {
-      containerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-    } else {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   // Paginated: when a nested ##/### heading inside the page is selected, scroll
@@ -978,7 +974,7 @@ function MarkdownViewerImpl({
       ),
       li: (p: any) => <li {...p}>{walkChildren(p.children)}</li>,
       table: (p: any) => (
-        <SavableBlock blockType="table">
+        <SavableBlock blockType="table" className="docs-savable-table">
           <div className="docs-table-wrap">
             <table {...p} />
           </div>
@@ -996,187 +992,90 @@ function MarkdownViewerImpl({
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {!presentMode && (
-        <ViewerHeader
-          nav={{
-            onPrev: () =>
-              singleMode
-                ? prevFile && onNav(prevFile.id, null)
-                : prevChunk && onNav(file.id, prevChunk.id),
-            onNext: () =>
-              singleMode
-                ? nextFile && onNav(nextFile.id, null)
-                : nextChunk && onNav(file.id, nextChunk.id),
-            prevDisabled: singleMode ? !prevFile : !prevChunk,
-            nextDisabled: singleMode ? !nextFile : !nextChunk,
-            prevLabel: singleMode ? "Previous file" : "Previous section",
-            nextLabel: singleMode ? "Next file" : "Next section",
-          }}
-          center={
-            singleMode || allChunks.length <= 1 ? (
-              <>
-                <span className="truncate min-w-0 text-sm font-semibold text-foreground">
-                  {stripExt(file.name)}
+      <ViewerHeader
+        navAction={
+          // The section picker heads the toolbar in both reading modes. Paged
+          // mode switches the page it renders; single-page mode scrolls to the
+          // heading in the whole-document render — the document has the same
+          // sections either way, so the same control moves between them.
+          allChunks.length <= 1 ? null : (
+            <Select
+              value={singleMode ? (activeSubtopicId ?? allChunks[0].id) : activeChunk.id}
+              onValueChange={(val) => onNav(file.id, val)}
+            >
+              {/* Borderless and fixed-width: it sits at the head of the toolbar
+                  where a bordered control read as an input, and a width that
+                  tracked the section title made the whole header shift on every
+                  section change. */}
+              <SelectTrigger className="h-9 w-56 shrink-0 flex items-center gap-2 rounded-lg border-0 bg-transparent px-2 py-1.5 text-sm font-medium text-foreground shadow-none hover:bg-accent/50 focus:ring-0">
+                <span className="truncate min-w-0 text-left">
+                  {singleMode
+                    ? (allChunks.find((c) => c.id === activeSubtopicId)?.title ??
+                      allChunks[0].title)
+                    : activeChunk.title}
                 </span>
-              </>
-            ) : (
-              <>
-                <Select value={activeChunk.id} onValueChange={(val) => onNav(file.id, val)}>
-                  <SelectTrigger className="w-fit min-w-0 max-w-full h-9 flex items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/50 focus:ring-0 shadow-none">
-                    <span className="truncate min-w-0 text-left">{stripExt(file.name)}</span>
-                  </SelectTrigger>
-                  <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
-                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
-                      Sections
-                    </div>
-                    <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
-                      {allChunks.map((chunk) => {
-                        // Cached word count — this list is rebuilt on every render
-                        // of the viewer, and scanning every section's text each
-                        // time was O(document) for a dropdown that is usually shut.
-                        const readingMin = readingMinutes(chunk.content);
-                        return (
-                          <SelectItem
-                            key={chunk.id}
-                            value={chunk.id}
-                            className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
-                          >
-                            <div className="flex w-full items-center justify-between gap-4">
-                              <span className="truncate">
-                                {chunk.title.length > 20
-                                  ? chunk.title.substring(0, 20) + "..."
-                                  : chunk.title}
-                              </span>
-                              <span className="shrink-0 text-xs text-muted-foreground">
-                                {readingMin} min
-                              </span>
-                            </div>
-                          </SelectItem>
-                        );
-                      })}
-                    </div>
-                  </SelectContent>
-                </Select>
-              </>
-            )
-          }
-          actions={
-            <>
-              <div className="hidden md:flex items-center gap-1">
+              </SelectTrigger>
+              <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
+                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
+                  Sections
+                </div>
+                <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
+                  {allChunks.map((chunk) => {
+                    // Cached word count — this list is rebuilt on every render
+                    // of the viewer, and scanning every section's text each
+                    // time was O(document) for a dropdown that is usually shut.
+                    const readingMin = readingMinutes(chunk.content);
+                    return (
+                      <SelectItem
+                        key={chunk.id}
+                        value={chunk.id}
+                        className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
+                      >
+                        <div className="flex w-full items-center justify-between gap-4">
+                          <span className="truncate">
+                            {chunk.title.length > 20
+                              ? chunk.title.substring(0, 20) + "..."
+                              : chunk.title}
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {readingMin} min
+                          </span>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                </div>
+              </SelectContent>
+            </Select>
+          )
+        }
+        actions={
+          <>
+            {/* Starring lives on the document's own row in the sidebar, and
+                editing lives in that row's menu. What is left here is the one
+                control that changes how this view reads. */}
+            <div className="flex items-center gap-1">
+              {!editMode && onToggleReadingMode && (
                 <button
-                  type="button"
-                  onClick={onToggleBookmark}
-                  aria-label={isBookmarked ? "Unstar" : "Star"}
+                  onClick={onToggleReadingMode}
+                  title={
+                    singleMode
+                      ? "Paged: read one section at a time"
+                      : "Single page: read the whole document"
+                  }
                   className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  <Star className={`h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`} />
+                  <Files className="h-4 w-4" />
                 </button>
-
-                {!editMode && onToggleReadingMode && (
-                  <button
-                    onClick={onToggleReadingMode}
-                    title={
-                      singleMode
-                        ? "Paged: read one section at a time"
-                        : "Single page: read the whole document"
-                    }
-                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <Files className="h-4 w-4" />
-                  </button>
-                )}
-                {!editMode && (
-                  <button
-                    onClick={togglePresentation}
-                    title="Present Mode (Fullscreen & Spotlight)"
-                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <Presentation className="h-4 w-4" />
-                  </button>
-                )}
-                {!editMode && (
-                  <button
-                    onClick={enterEditMode}
-                    title="Edit document"
-                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-
-              <div className="flex md:hidden items-center">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={onToggleBookmark}>
-                      <Star
-                        className={`mr-2 h-4 w-4 ${isBookmarked ? "fill-gold text-gold" : ""}`}
-                      />
-                      {isBookmarked ? "Unstar" : "Star"}
-                    </DropdownMenuItem>
-
-                    {!editMode && onToggleReadingMode && (
-                      <DropdownMenuItem onClick={onToggleReadingMode}>
-                        <Files className="mr-2 h-4 w-4" />
-                        Single page
-                      </DropdownMenuItem>
-                    )}
-                    {!editMode && (
-                      <DropdownMenuItem onClick={togglePresentation}>
-                        <Presentation className="mr-2 h-4 w-4" />
-                        Presentation Mode
-                      </DropdownMenuItem>
-                    )}
-                    {!editMode && (
-                      <DropdownMenuItem onClick={enterEditMode}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit document
-                      </DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </>
-          }
-        />
-      )}
+              )}
+            </div>
+          </>
+        }
+      />
       <div
         ref={containerRef}
         className="relative flex-1 overflow-y-auto transition-colors duration-500"
       >
-        <Spotlight active={presentMode} />
-        {presentMode && (
-          <div className="fixed top-4 left-4 z-50 flex items-center gap-1 rounded-full border border-border/20 bg-background/30 p-1 backdrop-blur-md opacity-30 hover:opacity-100 transition-opacity">
-            <button
-              onClick={() =>
-                singleMode
-                  ? prevFile && onNav(prevFile.id, null)
-                  : prevChunk && onNav(file.id, prevChunk.id)
-              }
-              disabled={singleMode ? !prevFile : !prevChunk}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </button>
-            <button
-              onClick={() =>
-                singleMode
-                  ? nextFile && onNav(nextFile.id, null)
-                  : nextChunk && onNav(file.id, nextChunk.id)
-              }
-              disabled={singleMode ? !nextFile : !nextChunk}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent disabled:opacity-50 disabled:pointer-events-none"
-            >
-              <ChevronRight className="h-5 w-5" />
-            </button>
-          </div>
-        )}
-
         {menu &&
           !editMode &&
           // Portalled to <body> on purpose. The popover is positioned in viewport
@@ -1398,11 +1297,6 @@ function MarkdownViewerImpl({
                 key={singleMode ? "full" : activeChunk.id}
                 ref={contentRef}
                 onClick={onContentClick}
-                className={
-                  presentMode
-                    ? "animate-in fade-in slide-in-from-bottom-4 duration-500 fill-mode-forwards"
-                    : ""
-                }
               >
                 <SavedContext.Provider value={savedCtx}>
                   <ReactMarkdown
@@ -1416,73 +1310,28 @@ function MarkdownViewerImpl({
               </div>
             )}
 
-            {/* Natural stopping point — quiet acknowledgement, clear next step.
-              Only in paginated mode; single page shows the whole document. */}
-            {!editMode && !singleMode && (
-              <div className="mt-20 border-t border-border pt-10">
-                <div className="flex flex-col items-center gap-6">
-                  <div className="w-full max-w-xl">
-                    {nextChunk ? (
-                      <button
-                        onClick={() => onNav(file.id, nextChunk.id)}
-                        className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
-                            Next {chunkIndex + 2}/{allChunks.length}
-                          </span>
-                          <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
-                            {nextChunk.title}
-                          </span>
-                        </span>
-                        <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
-                      </button>
-                    ) : nextFile ? (
-                      <button
-                        onClick={() => onNav(nextFile.id, null)}
-                        className="group flex w-full min-w-0 items-center justify-between gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-6 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-xs font-bold uppercase tracking-wider text-primary/80">
-                            Next Chapter
-                          </span>
-                          <span className="mt-1.5 block truncate text-lg font-semibold text-foreground group-hover:text-primary transition-colors">
-                            {stripExt(nextFile.name)}
-                          </span>
-                          {nextReadingMin != null && (
-                            <span className="mt-1 block text-xs font-medium text-muted-foreground">
-                              ≈ {nextReadingMin} min read
-                            </span>
-                          )}
-                        </span>
-                        <ArrowRight className="h-6 w-6 shrink-0 text-primary/70 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
-                      </button>
-                    ) : (
-                      <div className="flex items-center justify-center rounded-2xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                        You've reached the end.
-                      </div>
-                    )}
-                  </div>
-
-                  {(prevChunk || prevFile) && (
-                    <button
-                      onClick={() =>
-                        prevChunk
-                          ? onNav(file.id, prevChunk.id)
-                          : prevFile && onNav(prevFile.id, null)
-                      }
-                      className="group flex max-w-full items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      <ArrowLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-1" />
-                      <span className="truncate">
-                        {prevChunk
-                          ? `Previous: ${prevChunk.title}`
-                          : `Previous Chapter: ${prevFile ? stripExt(prevFile.name) : ""}`}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              </div>
+            {/* One pager for both reading modes. Paged mode steps section by
+                section and falls through to the next file at the end of a
+                document; single page shows everything, so it steps files. */}
+            {!editMode && (
+              <ViewerPager
+                className="mt-16 border-t border-border"
+                nextEyebrow={
+                  nextChunk ? `Next ${chunkIndex + 2}/${allChunks.length}` : "Next chapter"
+                }
+                nav={{
+                  onPrev: () => {
+                    if (!singleMode && prevChunk) onNav(file.id, prevChunk.id);
+                  },
+                  onNext: () => {
+                    if (!singleMode && nextChunk) onNav(file.id, nextChunk.id);
+                  },
+                  prevDisabled: singleMode || !prevChunk,
+                  nextDisabled: singleMode || !nextChunk,
+                  prevLabel: !singleMode && prevChunk ? `Previous: ${prevChunk.title}` : "Previous",
+                  nextLabel: !singleMode && nextChunk ? nextChunk.title || "Next" : "Next",
+                }}
+              />
             )}
           </article>
         </div>
@@ -1491,7 +1340,7 @@ function MarkdownViewerImpl({
           containerRef={containerRef}
           contentRef={contentRef}
           revision={markdownSource}
-          hidden={editMode || presentMode}
+          hidden={editMode}
         />
       </div>
     </div>
@@ -1618,8 +1467,10 @@ function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
               text: text || undefined,
             });
           }}
-          className={`ml-2 inline-flex items-center align-middle transition-opacity group-hover:opacity-100 ${
-            savedSection ? "opacity-100" : "opacity-0"
+          /* The icon stays 16px, but the button carries a 36px hit area so it
+             is reachable with a fingertip. */
+          className={`ml-1 inline-flex h-9 w-9 items-center justify-center align-middle transition-opacity group-hover:opacity-100 ${
+            savedSection ? "opacity-100" : "opacity-0 [@media(hover:none)]:opacity-100"
           }`}
           title={savedSection ? "Saved — click to remove" : "Save this section"}
           aria-label={savedSection ? "Remove saved section" : "Save section"}
@@ -1636,7 +1487,7 @@ function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         }}
-        className="ml-2 inline-flex items-center align-middle opacity-0 transition-opacity group-hover:opacity-100"
+        className="ml-1 inline-flex h-9 w-9 items-center justify-center align-middle opacity-0 transition-opacity group-hover:opacity-100 [@media(hover:none)]:opacity-100"
         aria-label="Copy link to heading"
       >
         {copied ? (
@@ -1669,6 +1520,13 @@ function CodeBlock({ children, ...rest }: any) {
     encodedMeta?.replaceAll("-", " ") ??
     "";
 
+  // ```mindmap fences hold JSON and draw as an interactive map, the same way
+  // ```mermaid fences hold diagram source. Any fence meta becomes the root's
+  // name when the JSON does not carry one.
+  if (lang === "mindmap") {
+    return <MindMapBlock code={extractText(codeEl?.props?.children)} title={meta} />;
+  }
+
   if (lang === "interactive-html" || lang === "interactive-react") {
     return (
       <InteractiveBlock
@@ -1693,7 +1551,10 @@ function CodeBlock({ children, ...rest }: any) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         }}
-        className="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2 py-1 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100"
+        aria-label={copied ? "Copied" : "Copy code"}
+        /* A hover-only reveal leaves this button unreachable on touch, so
+           `hover-none:opacity-100` pins it there. */
+        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       >
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
         {copied ? "Copied" : "Copy"}

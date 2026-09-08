@@ -5,7 +5,6 @@ import {
   Menu,
   X,
   Search,
-  Plus,
   Monitor,
   PanelLeftClose,
   PanelLeftOpen,
@@ -15,7 +14,13 @@ import {
   Settings,
 } from "lucide-react";
 
-import { Sidebar, DEFAULT_VIEW, type SidebarView } from "./Sidebar";
+import {
+  ESCAPE_DEPTH,
+  NavHistoryContext,
+  useNavHistoryState,
+  type NavEntry,
+} from "@/hooks/use-nav-history";
+import { Sidebar, AddMenu, DEFAULT_VIEW, type SidebarView } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { WorkspaceSheet } from "./WorkspaceSheet";
@@ -95,23 +100,19 @@ import { MAX_UPLOAD_BYTES, getMaxStorageBytes, formatBytes } from "@/lib/storage
 
 type Theme = ThemePref;
 
-const SIDEBAR_MIN = 220;
-const SIDEBAR_MAX = 480;
-const SIDEBAR_DEFAULT = 288;
-const SIDEBAR_WIDTH_KEY = "localdox:sidebarWidth";
-
-const clampWidth = (w: number) => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
+/**
+ * One sidebar width for everyone. It used to be drag-resizable and persisted
+ * per browser, which bought very little — the panel holds a file list, not a
+ * document — at the cost of a drag handle, a stored preference, and layouts
+ * that differed between machines. Long names are truncated with an ellipsis and
+ * carry their full text as a tooltip instead.
+ */
+const SIDEBAR_WIDTH = 288;
 
 // Shared empties, so "this file has no highlights / nothing saved" is always the
 // same array. A fresh `[]` would be a new prop identity on every render.
 const EMPTY_HIGHLIGHTS: Highlight[] = [];
 const EMPTY_SAVED: SavedItem[] = [];
-
-function loadSidebarWidth(): number {
-  if (typeof localStorage === "undefined") return SIDEBAR_DEFAULT;
-  const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
-  return v >= SIDEBAR_MIN && v <= SIDEBAR_MAX ? v : SIDEBAR_DEFAULT;
-}
 
 interface WorkspaceLite {
   id: string;
@@ -250,7 +251,6 @@ export function DocsApp() {
   const [readingFont, setReadingFont] = useState<ReadingFont>(() => loadPrefs().readingFont);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // File ids in most-recently-opened order — drives the "Recent" chip.
@@ -299,13 +299,30 @@ export function DocsApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const showSettings = location.pathname === "/settings";
+
+  // Navigation history. Owned here because this is where every destination —
+  // the route, the open file, the section, the search term — actually lives.
+  // `apply` is the only thing that moves the app backwards or forwards; the
+  // refs it reads are assigned further down, so it is written as a ref-reading
+  // callback rather than closing over state directly.
+  const applyNavEntryRef = useRef<(entry: NavEntry) => void>(() => {});
+  const applyNavEntry = useCallback((entry: NavEntry) => applyNavEntryRef.current(entry), []);
+  const captureNavScroll = useCallback(() => window.scrollY, []);
+  const navHistory = useNavHistoryState({
+    apply: applyNavEntry,
+    captureScroll: captureNavScroll,
+  });
+  // Read by callbacks that must not be recreated when the history changes.
+  const navHistoryRef = useRef(navHistory);
+  navHistoryRef.current = navHistory;
+  const highlightQueryRef = useRef(highlightQuery);
+  highlightQueryRef.current = highlightQuery;
   const [userName, setUserName] = useState<string | null>(null);
   const firstVisitRef = useRef(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const sidebarWrapRef = useRef<HTMLDivElement>(null);
   const sidebarInnerRef = useRef<HTMLDivElement>(null);
-  const widthRef = useRef(sidebarWidth);
   const firstCollapseRun = useRef(true);
 
   // Refs the (async, debounced) save reads from, so it always writes the latest
@@ -341,10 +358,6 @@ export function DocsApp() {
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoredFlash = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    widthRef.current = sidebarWidth;
-  }, [sidebarWidth]);
-
   // Collapse/expand the desktop sidebar; the main column is flex-1, so animating
   // the sidebar width lets content reflow frame-by-frame rather than snapping.
   // Width is driven imperatively so a re-render can't clobber the tween.
@@ -356,7 +369,7 @@ export function DocsApp() {
     const wrap = sidebarWrapRef.current;
     if (!wrap) return;
     const inner = sidebarInnerRef.current;
-    const width = sidebarCollapsed ? 56 : widthRef.current;
+    const width = sidebarCollapsed ? 56 : SIDEBAR_WIDTH;
     const opacity = sidebarCollapsed ? 0 : 1;
     const shift = sidebarCollapsed ? -16 : 0;
 
@@ -432,33 +445,6 @@ export function DocsApp() {
 
     return () => animations.forEach((a) => a.cancel());
   }, [sidebarCollapsed]);
-
-  const startResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = widthRef.current;
-    const onMove = (ev: MouseEvent) => {
-      const w = clampWidth(startW + (ev.clientX - startX));
-      widthRef.current = w;
-      if (sidebarWrapRef.current) sidebarWrapRef.current.style.width = `${w}px`;
-      setSidebarWidth(w);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-      try {
-        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(widthRef.current));
-      } catch {
-        /* storage unavailable — width stays for this session only */
-      }
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-  }, []);
 
   // Theme: apply to <html> and persist as a lightweight preference.
   // Apply the selected reader theme. All five themes are keyed by the
@@ -978,6 +964,15 @@ export function DocsApp() {
 
       setDrawerOpen(false);
       markDirty();
+      // Every in-app way of opening a document funnels through here — the
+      // sidebar, the palette, stars, internal links, the header's file stepper —
+      // so this is the one place the trail has to be recorded.
+      navHistoryRef.current.push({
+        path: "/",
+        fileId,
+        headingId: targetHeadingId,
+        query: query !== undefined ? query || null : highlightQueryRef.current,
+      });
     },
     [navigate, markDirty],
   );
@@ -1819,7 +1814,37 @@ export function DocsApp() {
     if (activeFile) toggleSaved(activeFile.id, { kind: "file", title: activeFile.name });
   }, [toggleSaved, activeFile]);
 
+  // Star / unstar any document from its sidebar row, not just the open one —
+  // the header no longer carries a star.
+  const toggleFileStar = useCallback(
+    (fileId: string) => {
+      const file = filesRef.current.find((f) => f.id === fileId);
+      if (file) toggleSaved(fileId, { kind: "file", title: file.name });
+    },
+    [toggleSaved],
+  );
+
+  // The collapsed rail's "New folder" — the expanded sidebar asks for the name
+  // itself, so the rail has to do the same before it can create one.
+  const promptNewFolderFromRail = useCallback(() => {
+    const name = window.prompt("Folder name:", "New folder");
+    if (name && name.trim()) createFolder(name.trim());
+  }, [createFolder]);
+
   const consumeStartInEdit = useCallback(() => setAutoEditFileId(null), []);
+
+  // "Edit" from a file's sidebar menu: open the document if it isn't already,
+  // then ask the viewer to start in its editor. Reuses the same channel a
+  // newly-created blank document travels through.
+  const editFile = useCallback(
+    (fileId: string) => {
+      if (fileId !== activeFileIdRef.current) handleSelect(fileId);
+      setAutoEditFileId(fileId);
+    },
+    // handleSelect is redefined every render; calling the latest one is correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
   const clearPendingSaved = useCallback(() => setPendingSaved(null), []);
 
   const nextReadingMinutes = useMemo(
@@ -1863,7 +1888,120 @@ export function DocsApp() {
   );
 
   const goHome = useCallback(() => navigate({ to: "/" }), [navigate]);
-  const openSettings = useCallback(() => navigate({ to: "/settings" }), [navigate]);
+  const openSettings = useCallback(() => {
+    navigate({ to: "/settings" });
+    navHistoryRef.current.push({ path: "/settings", fileId: null, headingId: null });
+  }, [navigate]);
+
+  // Closing the dialog is a route change back to the reader. Going through the
+  // trail rather than straight to "/" keeps whatever document was open, and
+  // means the close button, Escape, the backdrop and back all do one thing.
+  const closeSettings = useCallback(() => {
+    if (navHistoryRef.current.canBack) navHistoryRef.current.back();
+    else navigate({ to: "/" });
+  }, [navigate]);
+
+  // Put the app into a recorded destination. This is the inverse of `push`: it
+  // restores the route, the document, the section, the search term and the
+  // scroll offset, without recording anything itself (the history suppresses
+  // pushes while it is applying, which is what keeps the forward trail alive).
+  applyNavEntryRef.current = (entry: NavEntry) => {
+    if (pathnameRef.current !== entry.path) navigate({ to: entry.path });
+    setHighlightQuery(entry.query);
+    // A reader entry always names its document. An entry without one is a
+    // non-reader destination (settings), where the open file is left as it is so
+    // coming back out of it lands on the document that was already open.
+    if (entry.fileId) {
+      setActiveFileId(entry.fileId);
+      setActiveHeadingId(entry.headingId);
+    }
+    setDrawerOpen(false);
+    // After the document has painted. Restoring the offset before the content
+    // exists would scroll a short page and land at the top.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.scrollTo({ top: entry.scrollY }));
+    });
+  };
+
+  // Seed the trail with wherever the reader landed, so the first back has
+  // somewhere to return to and the first open is not also the first entry.
+  //
+  // Waits for the document, not just for `booting`: hydration sets the open file
+  // and clears the boot flag in the same commit, so an effect keyed on `booting`
+  // alone reads `activeFileId` as null and seeds an entry that restores nothing.
+  // Settings is seeded without one, since it legitimately has no open document.
+  const navSeededRef = useRef(false);
+  useEffect(() => {
+    if (booting || navSeededRef.current) return;
+    if (!activeFileId && !showSettings) return;
+    navSeededRef.current = true;
+    // A trail restored from the session already knows where we are; seeding on
+    // top of it would record the landing twice and make the first back a no-op.
+    if (navHistoryRef.current.canBack || navHistoryRef.current.canForward) return;
+    navHistoryRef.current.push({
+      path: location.pathname,
+      fileId: activeFileId,
+      headingId: activeHeadingId,
+      query: highlightQuery,
+    });
+    // Runs once, on the first render that has somewhere to return to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [booting, activeFileId, showSettings]);
+
+  // App-level dismissables. Each is registered while open so back closes it
+  // before it walks the trail — the reader's last action was opening the panel,
+  // so that is what back should undo. These are registered directly rather than
+  // through `useNavEscape`, because this component owns the history rather than
+  // consuming it from the context it provides.
+  const { registerEscape } = navHistory;
+  useEffect(() => {
+    if (!drawerOpen) return;
+    return registerEscape({
+      id: "drawer",
+      depth: ESCAPE_DEPTH.panel,
+      close: () => setDrawerOpen(false),
+    });
+  }, [drawerOpen, registerEscape]);
+  useEffect(() => {
+    if (!aiOpen) return;
+    return registerEscape({
+      id: "ai-panel",
+      depth: ESCAPE_DEPTH.panel,
+      close: () => setAiOpen(false),
+    });
+  }, [aiOpen, registerEscape]);
+  useEffect(() => {
+    if (!paletteOpen) return;
+    return registerEscape({
+      id: "palette",
+      depth: ESCAPE_DEPTH.overlay,
+      close: () => setPaletteOpen(false),
+    });
+  }, [paletteOpen, registerEscape]);
+  useEffect(() => {
+    if (!highlightsOnlyFileId) return;
+    return registerEscape({
+      id: "highlights-only",
+      depth: ESCAPE_DEPTH.overlay,
+      close: () => setHighlightsOnlyFileId(null),
+    });
+  }, [highlightsOnlyFileId, registerEscape]);
+
+  // The browser's own back/gesture is the same intent as the header's back, so
+  // it runs the same code — including closing an open mode first. `popstate`
+  // fires after the router has already moved, so the route is put back when an
+  // escape swallowed the gesture.
+  useEffect(() => {
+    const onPopState = () => {
+      if (navHistoryRef.current.popEscape()) {
+        window.history.forward();
+        return;
+      }
+      navHistoryRef.current.back();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   // Ask AI: opened either from the sidebar (no prefill) or from a text-selection
   // quick action in the reader (seeded with the selection + chosen action).
@@ -1992,11 +2130,52 @@ export function DocsApp() {
     </Suspense>
   ) : null;
 
+  // Settings is a dialog over the reader rather than a page of its own, so the
+  // document stays visible behind it and closing it returns you to exactly what
+  // you were reading. `/settings` stays a real route so the deep link still
+  // works — it just opens the dialog on top. Rendered from both the empty state
+  // and the reader, so that link resolves even before any document is open.
+  const settingsDialog = showSettings ? (
+    <Suspense fallback={null}>
+      <SettingsPage
+        workspaces={workspaces}
+        currentWorkspaceId={workspaceId}
+        onRenameWorkspace={renameWorkspace}
+        onDeleteWorkspace={deleteWorkspace}
+        onClearStorage={clearAllStorage}
+        saved={savedEntries}
+        onOpenSaved={openSaved}
+        onRemoveSaved={removeSaved}
+        onClearSaved={() => {
+          setSaved([]);
+          markDirty();
+        }}
+        highlights={highlights}
+        onRemoveHighlight={removeHighlight}
+        onClearHighlights={() => {
+          setHighlights([]);
+          markDirty();
+        }}
+        onNavigate={openFromHome}
+        files={files}
+        onOpenWorkspace={openWorkspaceFromHome}
+        theme={theme}
+        onSetTheme={setTheme}
+        readingMode={readingMode}
+        onSetReadingMode={setReadingMode}
+        readingFont={readingFont}
+        onSetReadingFont={setReadingFont}
+        onToggleArchiveFile={toggleArchiveFile}
+        onClose={closeSettings}
+      />
+    </Suspense>
+  ) : null;
+
   if (booting) {
     return <div className="min-h-dvh bg-background" />;
   }
 
-  if (files.length === 0 && !showSettings) {
+  if (files.length === 0) {
     return (
       <div className="min-h-dvh bg-background">
         <Header
@@ -2060,383 +2239,376 @@ export function DocsApp() {
         />
         {dragOverlay}
         {shareDialog}
+        {settingsDialog}
       </div>
     );
   }
 
   return (
-    <div className="min-h-dvh bg-background">
-      <Header
-        hideOnDesktop
-        theme={theme}
-        onCycleTheme={cycleTheme}
-        onMenu={() => setDrawerOpen(true)}
-        onOpenPalette={() => setPaletteOpen(true)}
-        hasFiles
-        onAddFiles={() => inputRef.current?.click()}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={toggleSidebar}
-        saveStatus={saveStatus}
-        onHome={goHome}
-        workspaces={workspaces}
-        currentWorkspaceId={workspaceId}
-        onSwitchWorkspace={switchWorkspace}
-        onNewWorkspace={newWorkspace}
-        onImportWorkspace={importWorkspace}
-        onExportWorkspace={exportWorkspace}
-        onShareWorkspace={shareWorkspace}
-        onDeleteWorkspace={deleteWorkspace}
-      />
+    <NavHistoryContext.Provider value={navHistory}>
+      <div className="min-h-dvh bg-background">
+        <Header
+          hideOnDesktop
+          theme={theme}
+          onCycleTheme={cycleTheme}
+          onMenu={() => setDrawerOpen(true)}
+          onOpenPalette={() => setPaletteOpen(true)}
+          hasFiles
+          onAddFiles={() => inputRef.current?.click()}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={toggleSidebar}
+          saveStatus={saveStatus}
+          onHome={goHome}
+          workspaces={workspaces}
+          currentWorkspaceId={workspaceId}
+          onSwitchWorkspace={switchWorkspace}
+          onNewWorkspace={newWorkspace}
+          onImportWorkspace={importWorkspace}
+          onExportWorkspace={exportWorkspace}
+          onShareWorkspace={shareWorkspace}
+          onDeleteWorkspace={deleteWorkspace}
+        />
 
-      {commandPalette}
+        {commandPalette}
 
-      <div className="flex">
-        <div
-          ref={sidebarWrapRef}
-          className="sticky top-0 hidden h-dvh shrink-0 border-r border-border bg-background md:block md:portrait:hidden"
-        >
-          <div ref={sidebarInnerRef} className="h-full" style={{ width: sidebarWidth }}>
-            <Sidebar
-              files={files}
-              activeFileId={activeFileId}
-              activeHeadingId={activeHeadingId}
-              expanded={expanded}
-              onToggleFile={toggleFile}
-              onSelect={handleSelect}
-              onAddFiles={() => inputRef.current?.click()}
-              onRemoveFile={removeFile}
-              onArchiveFile={toggleArchiveFile}
-              onDownloadFile={downloadFile}
-              onShareFile={shareFile}
-              onShareFiles={(ids) => void shareFiles(ids)}
-              onRenameFile={renameFile}
-              folders={folders}
-              onCreateFile={createFile}
-              onCreateFolder={createFolder}
-              onRenameFolder={renameFolder}
-              onDeleteFolder={deleteFolder}
-              onMoveFileToFolder={moveFileToFolder}
-              onReorderFile={reorderFile}
-              onSortByName={sortFilesByName}
-              view={sidebarView}
-              onView={setSidebarView}
-              saved={savedEntries}
-              onOpenSaved={openSaved}
-              onRemoveSaved={removeSaved}
-              theme={theme}
-              onCycleTheme={cycleTheme}
-              currentWorkspaceName={workspaceNameRef.current}
-              canDeleteWorkspace={workspaces.length > 1}
-              onRenameCurrentWorkspace={(name) =>
-                workspaceIdRef.current && void renameWorkspace(workspaceIdRef.current, name)
-              }
-              onDeleteCurrentWorkspace={() =>
-                workspaceIdRef.current && void deleteWorkspace(workspaceIdRef.current)
-              }
-              onClearStorage={clearAllStorage}
-              highlights={highlights}
-              onRemoveHighlight={removeHighlight}
-              onShowHighlights={setHighlightsOnlyFileId}
-              onOpenSettings={openSettings}
-              onAskAi={openAskAi}
-              onNewWorkspace={newWorkspace}
-              onImportWorkspace={importWorkspace}
-              onExportWorkspace={exportWorkspace}
-              onShareWorkspace={shareWorkspace}
-              workspaces={workspaces}
-              currentWorkspaceId={workspaceId}
-              onSwitchWorkspace={switchWorkspace}
-              onDeleteWorkspace={deleteWorkspace}
-              docked
-              onOpenPalette={() => setPaletteOpen(true)}
-              onToggleSidebar={toggleSidebar}
-            />
-          </div>
-
+        <div className="flex">
           <div
-            className="absolute inset-y-0 left-0 flex w-14 flex-col items-center gap-4 border-r border-border bg-background py-3 z-20 transition-opacity duration-200"
-            style={{
-              opacity: sidebarCollapsed ? 1 : 0,
-              pointerEvents: sidebarCollapsed ? "auto" : "none",
-            }}
+            ref={sidebarWrapRef}
+            className="sticky top-0 hidden h-dvh shrink-0 border-r border-border bg-background lg:block"
+            style={{ width: sidebarCollapsed ? 56 : SIDEBAR_WIDTH }}
           >
-            <button
-              onClick={() => setSidebarCollapsed(false)}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setPaletteOpen(true)}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label="Search docs or ask AI"
-              title="Search docs or ask AI"
-            >
-              <Search className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => inputRef.current?.click()}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label="Upload files"
-              title="Upload files"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-            <div className="flex-1" />
-            <button
-              onClick={openSettings}
-              className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label="Settings"
-              title="Settings"
-            >
-              <Settings className="h-4 w-4" />
-            </button>
-          </div>
-
-          {!sidebarCollapsed && (
-            <div
-              onMouseDown={startResize}
-              onDoubleClick={() => {
-                widthRef.current = SIDEBAR_DEFAULT;
-                setSidebarWidth(SIDEBAR_DEFAULT);
-                if (sidebarWrapRef.current)
-                  sidebarWrapRef.current.style.width = `${SIDEBAR_DEFAULT}px`;
-                try {
-                  localStorage.setItem(SIDEBAR_WIDTH_KEY, String(SIDEBAR_DEFAULT));
-                } catch {
-                  /* ignore */
-                }
-              }}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize sidebar (double-click to reset)"
-              title="Drag to resize · double-click to reset"
-              className="absolute right-0 top-16 z-10 h-[calc(100%-4rem)] w-1.5 cursor-col-resize"
-            ></div>
-          )}
-        </div>
-
-        {drawerOpen && (
-          <div className="fixed inset-0 z-(--z-overlay) md:hidden">
-            <div
-              className="absolute inset-0 bg-foreground/20 backdrop-blur-sm"
-              onClick={() => setDrawerOpen(false)}
-            />
-            <div className="absolute left-0 top-0 h-full w-80 max-w-[85vw] border-r border-border bg-background shadow-2xl animate-in slide-in-from-left duration-200">
-              <div className="flex h-14 items-center justify-between border-b border-border px-4">
-                <span className="text-sm font-semibold truncate px-1">
-                  {workspaceNameRef.current || "Workspace"}
-                </span>
-                <button onClick={() => setDrawerOpen(false)} aria-label="Close">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="h-[calc(100%-3.5rem)]">
-                <Sidebar
-                  files={files}
-                  activeFileId={activeFileId}
-                  activeHeadingId={activeHeadingId}
-                  expanded={expanded}
-                  onToggleFile={toggleFile}
-                  onSelect={handleSelect}
-                  onAddFiles={() => inputRef.current?.click()}
-                  onRemoveFile={removeFile}
-                  onArchiveFile={toggleArchiveFile}
-                  onDownloadFile={downloadFile}
-                  onShareFile={shareFile}
-                  onShareFiles={(ids) => void shareFiles(ids)}
-                  onRenameFile={renameFile}
-                  folders={folders}
-                  onCreateFile={createFile}
-                  onCreateFolder={createFolder}
-                  onRenameFolder={renameFolder}
-                  onDeleteFolder={deleteFolder}
-                  onMoveFileToFolder={moveFileToFolder}
-                  onReorderFile={reorderFile}
-                  onSortByName={sortFilesByName}
-                  view={sidebarView}
-                  onView={setSidebarView}
-                  saved={savedEntries}
-                  onOpenSaved={openSaved}
-                  onRemoveSaved={removeSaved}
-                  theme={theme}
-                  onCycleTheme={cycleTheme}
-                  currentWorkspaceName={workspaceNameRef.current}
-                  canDeleteWorkspace={workspaces.length > 1}
-                  onRenameCurrentWorkspace={(name) =>
-                    workspaceIdRef.current && void renameWorkspace(workspaceIdRef.current, name)
-                  }
-                  onDeleteCurrentWorkspace={() =>
-                    workspaceIdRef.current && void deleteWorkspace(workspaceIdRef.current)
-                  }
-                  onClearStorage={clearAllStorage}
-                  highlights={highlights}
-                  onRemoveHighlight={removeHighlight}
-                  onShowHighlights={(id) => {
-                    setHighlightsOnlyFileId(id);
-                    setDrawerOpen(false);
-                  }}
-                  onOpenSettings={openSettings}
-                  onAskAi={() => {
-                    setDrawerOpen(false);
-                    openAskAi();
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* One boundary for the whole content column. The settings page and the
-            binary-document viewers are code-split; the markdown viewer is not,
-            so the common case never suspends here. */}
-        <Suspense fallback={<main className="min-w-0 flex-1" aria-busy />}>
-          <main className="min-w-0 flex-1 pb-24 lg:pb-0 md:landscape:pb-0">
-            {showSettings ? (
-              <SettingsPage
-                workspaces={workspaces}
-                currentWorkspaceId={workspaceId}
-                onRenameWorkspace={renameWorkspace}
-                onDeleteWorkspace={deleteWorkspace}
-                onClearStorage={clearAllStorage}
+            <div ref={sidebarInnerRef} className="h-full w-full">
+              <Sidebar
+                files={files}
+                activeFileId={activeFileId}
+                activeHeadingId={activeHeadingId}
+                expanded={expanded}
+                onToggleFile={toggleFile}
+                onSelect={handleSelect}
+                onAddFiles={() => inputRef.current?.click()}
+                onRemoveFile={removeFile}
+                onArchiveFile={toggleArchiveFile}
+                onDownloadFile={downloadFile}
+                onShareFile={shareFile}
+                onShareFiles={(ids) => void shareFiles(ids)}
+                onRenameFile={renameFile}
+                onEditFile={editFile}
+                onToggleFileStar={toggleFileStar}
+                folders={folders}
+                onCreateFile={createFile}
+                onCreateFolder={createFolder}
+                onRenameFolder={renameFolder}
+                onDeleteFolder={deleteFolder}
+                onMoveFileToFolder={moveFileToFolder}
+                onReorderFile={reorderFile}
+                onSortByName={sortFilesByName}
+                view={sidebarView}
+                onView={setSidebarView}
                 saved={savedEntries}
                 onOpenSaved={openSaved}
                 onRemoveSaved={removeSaved}
-                onClearSaved={() => {
-                  setSaved([]);
-                  markDirty();
-                }}
+                theme={theme}
+                onCycleTheme={cycleTheme}
+                currentWorkspaceName={workspaceNameRef.current}
+                canDeleteWorkspace={workspaces.length > 1}
+                onRenameCurrentWorkspace={(name) =>
+                  workspaceIdRef.current && void renameWorkspace(workspaceIdRef.current, name)
+                }
+                onDeleteCurrentWorkspace={() =>
+                  workspaceIdRef.current && void deleteWorkspace(workspaceIdRef.current)
+                }
+                onClearStorage={clearAllStorage}
                 highlights={highlights}
                 onRemoveHighlight={removeHighlight}
-                onClearHighlights={() => {
-                  setHighlights([]);
-                  markDirty();
-                }}
-                onNavigate={openFromHome}
-                files={files}
-                onOpenWorkspace={openWorkspaceFromHome}
-                theme={theme}
-                onSetTheme={setTheme}
-                readingMode={readingMode}
-                onSetReadingMode={setReadingMode}
-                readingFont={readingFont}
-                onSetReadingFont={setReadingFont}
-                onToggleArchiveFile={toggleArchiveFile}
+                onShowHighlights={setHighlightsOnlyFileId}
+                onOpenSettings={openSettings}
+                onAskAi={openAskAi}
+                onNewWorkspace={newWorkspace}
+                onImportWorkspace={importWorkspace}
+                onExportWorkspace={exportWorkspace}
+                onShareWorkspace={shareWorkspace}
+                workspaces={workspaces}
+                currentWorkspaceId={workspaceId}
+                onSwitchWorkspace={switchWorkspace}
+                onDeleteWorkspace={deleteWorkspace}
+                docked
+                onOpenPalette={() => setPaletteOpen(true)}
+                onToggleSidebar={toggleSidebar}
               />
-            ) : activeFile &&
+            </div>
+
+            <div
+              className="absolute inset-y-0 left-0 flex w-14 flex-col items-center gap-4 border-r border-border bg-background py-3 z-20 transition-opacity duration-200"
+              style={{
+                opacity: sidebarCollapsed ? 1 : 0,
+                pointerEvents: sidebarCollapsed ? "auto" : "none",
+              }}
+            >
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label="Expand sidebar"
+                title="Expand sidebar"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setPaletteOpen(true)}
+                className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label="Search docs"
+                title="Search docs"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+              {/* The same three ways to add as the expanded sidebar offers —
+                  the rail used to jump straight to the file picker, which was
+                  the one option of the three you could not undo by closing a
+                  menu. Opens rightwards, since there is nothing to its left. */}
+              <AddMenu
+                align="left"
+                onCreateFile={() => createFile(null)}
+                onCreateFolder={promptNewFolderFromRail}
+                onUpload={() => inputRef.current?.click()}
+                buttonClassName="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+              />
+              <div className="flex-1" />
+              {/* The workspace monogram, not a settings gear: it opens the same
+                  workspace menu the expanded sidebar's footer row does, and
+                  Settings is one of the items inside it. */}
+              <WorkspaceMenu
+                variant="icon"
+                workspaces={workspaces}
+                currentId={workspaceId}
+                onSwitch={switchWorkspace}
+                onNew={(name) => void newWorkspace(name)}
+                onDelete={(id) => void deleteWorkspace(id)}
+                onImport={(file) => void importWorkspace(file)}
+                onExport={exportWorkspace}
+                onShare={shareWorkspace}
+                onSettings={openSettings}
+              />
+            </div>
+          </div>
+
+          {drawerOpen && (
+            <div className="fixed inset-0 z-(--z-overlay) lg:hidden">
+              <div
+                className="absolute inset-0 bg-foreground/20 backdrop-blur-sm"
+                onClick={() => setDrawerOpen(false)}
+              />
+              <div className="absolute left-0 top-0 flex h-full w-80 max-w-[85vw] flex-col border-r border-border bg-background shadow-2xl animate-in slide-in-from-left duration-200 pl-[env(safe-area-inset-left)] pb-[env(safe-area-inset-bottom)]">
+                <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+                  <span className="text-sm font-semibold truncate px-1">
+                    {workspaceNameRef.current || "Workspace"}
+                  </span>
+                  <button
+                    onClick={() => setDrawerOpen(false)}
+                    aria-label="Close"
+                    className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1">
+                  <Sidebar
+                    files={files}
+                    activeFileId={activeFileId}
+                    activeHeadingId={activeHeadingId}
+                    expanded={expanded}
+                    onToggleFile={toggleFile}
+                    onSelect={handleSelect}
+                    onAddFiles={() => inputRef.current?.click()}
+                    onRemoveFile={removeFile}
+                    onArchiveFile={toggleArchiveFile}
+                    onDownloadFile={downloadFile}
+                    onShareFile={shareFile}
+                    onShareFiles={(ids) => void shareFiles(ids)}
+                    onRenameFile={renameFile}
+                    onEditFile={editFile}
+                    onToggleFileStar={toggleFileStar}
+                    folders={folders}
+                    onCreateFile={createFile}
+                    onCreateFolder={createFolder}
+                    onRenameFolder={renameFolder}
+                    onDeleteFolder={deleteFolder}
+                    onMoveFileToFolder={moveFileToFolder}
+                    onReorderFile={reorderFile}
+                    onSortByName={sortFilesByName}
+                    view={sidebarView}
+                    onView={setSidebarView}
+                    saved={savedEntries}
+                    onOpenSaved={openSaved}
+                    onRemoveSaved={removeSaved}
+                    theme={theme}
+                    onCycleTheme={cycleTheme}
+                    currentWorkspaceName={workspaceNameRef.current}
+                    canDeleteWorkspace={workspaces.length > 1}
+                    onRenameCurrentWorkspace={(name) =>
+                      workspaceIdRef.current && void renameWorkspace(workspaceIdRef.current, name)
+                    }
+                    onDeleteCurrentWorkspace={() =>
+                      workspaceIdRef.current && void deleteWorkspace(workspaceIdRef.current)
+                    }
+                    onClearStorage={clearAllStorage}
+                    highlights={highlights}
+                    onRemoveHighlight={removeHighlight}
+                    onShowHighlights={(id) => {
+                      setHighlightsOnlyFileId(id);
+                      setDrawerOpen(false);
+                    }}
+                    onOpenSettings={() => {
+                      setDrawerOpen(false);
+                      openSettings();
+                    }}
+                    onAskAi={() => {
+                      setDrawerOpen(false);
+                      openAskAi();
+                    }}
+                    /* The workspace footer is what carries Settings, and with
+                       it the workspace switcher. Without these the drawer —
+                       the only navigation below `lg` — had no route to either. */
+                    workspaces={workspaces}
+                    currentWorkspaceId={workspaceId}
+                    onSwitchWorkspace={(id) => {
+                      setDrawerOpen(false);
+                      switchWorkspace(id);
+                    }}
+                    onNewWorkspace={newWorkspace}
+                    onImportWorkspace={importWorkspace}
+                    onExportWorkspace={exportWorkspace}
+                    onShareWorkspace={shareWorkspace}
+                    onDeleteWorkspace={deleteWorkspace}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* One boundary for the whole content column. The settings page and the
+            binary-document viewers are code-split; the markdown viewer is not,
+            so the common case never suspends here. */}
+          <Suspense fallback={<main className="min-w-0 flex-1" aria-busy />}>
+            <main className="min-w-0 flex-1 pb-[max(1.5rem,env(safe-area-inset-bottom))] lg:pb-0">
+              {activeFile &&
               (activeFile.kind === "markdown" || activeFile.kind === "text" || !activeFile.kind) ? (
-              <MarkdownViewer
-                file={activeFile}
-                prevFile={prevFile}
-                nextFile={nextFile}
-                onNav={navFromViewer}
-                activeSubtopicId={activeHeadingId}
-                highlightQuery={highlightQuery}
-                onContentChange={handleContentChange}
-                startInEditFileId={autoEditFileId}
-                onStartInEditConsumed={consumeStartInEdit}
-                nextReadingMin={nextReadingMinutes}
-                isBookmarked={!!activePageSaved}
-                onToggleBookmark={toggleActivePageSaved}
-                highlights={activeFileHighlights}
-                onAddHighlight={addHighlightToActive}
-                onUpdateHighlight={updateHighlight}
-                onRemoveHighlight={removeHighlight}
-                onRepairHighlights={repairHighlights}
-                saved={activeFileSaved}
-                onToggleSaved={toggleSavedOnActive}
-                onRemoveSaved={removeSaved}
-                pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
-                onSavedShown={clearPendingSaved}
-                onHome={goHome}
-                onShareFile={shareActiveFile}
-                onAskAi={askAiFromSelection}
-                readingMode={readingMode}
-                workspaceId={workspaceId}
-                workspaceRevision={workspaceRevision}
-                workspaceFiles={files}
-                workspaceName={workspaceNameRef.current}
-                onOpenArtifact={openEmbeddedArtifact}
-              />
-            ) : activeFile ? (
-              <DocumentViewer
-                file={activeFile}
-                isBookmarked={!!findSaved(saved, { fileId: activeFile.id, kind: "file" })}
-                onToggleBookmark={toggleActiveDocumentSaved}
-                prevFile={prevFile}
-                nextFile={nextFile}
-                onNavFile={navToFile}
-              />
-            ) : null}
-          </main>
-        </Suspense>
-      </div>
+                <MarkdownViewer
+                  file={activeFile}
+                  prevFile={prevFile}
+                  nextFile={nextFile}
+                  onNav={navFromViewer}
+                  activeSubtopicId={activeHeadingId}
+                  highlightQuery={highlightQuery}
+                  onContentChange={handleContentChange}
+                  startInEditFileId={autoEditFileId}
+                  onStartInEditConsumed={consumeStartInEdit}
+                  nextReadingMin={nextReadingMinutes}
+                  isBookmarked={!!activePageSaved}
+                  onToggleBookmark={toggleActivePageSaved}
+                  highlights={activeFileHighlights}
+                  onAddHighlight={addHighlightToActive}
+                  onUpdateHighlight={updateHighlight}
+                  onRemoveHighlight={removeHighlight}
+                  onRepairHighlights={repairHighlights}
+                  saved={activeFileSaved}
+                  onToggleSaved={toggleSavedOnActive}
+                  onRemoveSaved={removeSaved}
+                  pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
+                  onSavedShown={clearPendingSaved}
+                  onHome={goHome}
+                  onShareFile={shareActiveFile}
+                  onAskAi={askAiFromSelection}
+                  readingMode={readingMode}
+                  workspaceId={workspaceId}
+                  workspaceRevision={workspaceRevision}
+                  workspaceFiles={files}
+                  workspaceName={workspaceNameRef.current}
+                  onOpenArtifact={openEmbeddedArtifact}
+                  onOpenPalette={() => setPaletteOpen(true)}
+                />
+              ) : activeFile ? (
+                <DocumentViewer
+                  file={activeFile}
+                  isBookmarked={!!findSaved(saved, { fileId: activeFile.id, kind: "file" })}
+                  onToggleBookmark={toggleActiveDocumentSaved}
+                  prevFile={prevFile}
+                  nextFile={nextFile}
+                  onNavFile={navToFile}
+                  onContentChange={handleContentChange}
+                  onOpenPalette={() => setPaletteOpen(true)}
+                  startInEditFileId={autoEditFileId}
+                  onStartInEditConsumed={consumeStartInEdit}
+                />
+              ) : null}
+            </main>
+          </Suspense>
+        </div>
 
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept={SUPPORTED_ACCEPT}
-        className="hidden"
-        onChange={(e) => {
-          handleFileInput(e.target.files);
-          e.target.value = "";
-        }}
-      />
-      {highlightsOnlyFileId &&
-        (() => {
-          const hlFile = files.find((f) => f.id === highlightsOnlyFileId);
-          if (!hlFile) return null;
-          const hlFileChunks = fileSubtopics(hlFile);
-          const chunkOrder = new Map(hlFileChunks.map((c, i) => [c.id, i]));
-          const fileHighlights = highlights
-            .filter((h) => h.fileId === hlFile.id)
-            .sort((a, b) => {
-              const aChunkIndex = chunkOrder.get(a.subtopicId ?? "") ?? -1;
-              const bChunkIndex = chunkOrder.get(b.subtopicId ?? "") ?? -1;
-              if (aChunkIndex !== bChunkIndex) return aChunkIndex - bChunkIndex;
-              return (a.start ?? 0) - (b.start ?? 0);
-            });
-          return (
-            <Suspense fallback={null}>
-              <HighlightsOnlyModal
-                fileName={hlFile.name}
-                highlights={fileHighlights}
-                onClose={() => setHighlightsOnlyFileId(null)}
-                onJump={(hl: Highlight) => {
-                  setHighlightsOnlyFileId(null);
-                  handleSelect(hl.fileId, hl.subtopicId || undefined);
-                }}
-                onRemove={removeHighlight}
-              />
-            </Suspense>
-          );
-        })()}
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept={SUPPORTED_ACCEPT}
+          className="hidden"
+          onChange={(e) => {
+            handleFileInput(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        {highlightsOnlyFileId &&
+          (() => {
+            const hlFile = files.find((f) => f.id === highlightsOnlyFileId);
+            if (!hlFile) return null;
+            const hlFileChunks = fileSubtopics(hlFile);
+            const chunkOrder = new Map(hlFileChunks.map((c, i) => [c.id, i]));
+            const fileHighlights = highlights
+              .filter((h) => h.fileId === hlFile.id)
+              .sort((a, b) => {
+                const aChunkIndex = chunkOrder.get(a.subtopicId ?? "") ?? -1;
+                const bChunkIndex = chunkOrder.get(b.subtopicId ?? "") ?? -1;
+                if (aChunkIndex !== bChunkIndex) return aChunkIndex - bChunkIndex;
+                return (a.start ?? 0) - (b.start ?? 0);
+              });
+            return (
+              <Suspense fallback={null}>
+                <HighlightsOnlyModal
+                  fileName={hlFile.name}
+                  highlights={fileHighlights}
+                  onClose={() => setHighlightsOnlyFileId(null)}
+                  onJump={(hl: Highlight) => {
+                    setHighlightsOnlyFileId(null);
+                    handleSelect(hl.fileId, hl.subtopicId || undefined);
+                  }}
+                  onRemove={removeHighlight}
+                />
+              </Suspense>
+            );
+          })()}
 
-      {/* Mounted only once opened. The panel is a large component whose props
+        {/* Mounted only once opened. The panel is a large component whose props
           are derived from every document in the workspace; keeping it out of
           the tree until it is asked for saves that work on every render. */}
-      {aiOpen && (
-        <Suspense fallback={null}>
-          <AskAiPanel
-            open
-            onClose={closeAskAi}
-            prefill={aiPrefill}
-            initialSelection={null}
-            activeFile={aiActiveFile}
-            activeSection={aiActiveSection}
-            files={aiFiles}
-            onInsert={insertAiOutput}
-            onCreateDoc={createAiDoc}
-          />
-        </Suspense>
-      )}
+        {aiOpen && (
+          <Suspense fallback={null}>
+            <AskAiPanel
+              open
+              onClose={closeAskAi}
+              prefill={aiPrefill}
+              initialSelection={null}
+              activeFile={aiActiveFile}
+              activeSection={aiActiveSection}
+              files={aiFiles}
+              onInsert={insertAiOutput}
+              onCreateDoc={createAiDoc}
+            />
+          </Suspense>
+        )}
 
-      {dragOverlay}
-      {shareDialog}
-    </div>
+        {settingsDialog}
+
+        {dragOverlay}
+        {shareDialog}
+      </div>
+    </NavHistoryContext.Provider>
   );
 }
 
@@ -2489,15 +2661,15 @@ function Header({
 }) {
   return (
     <header
-      className={`app-surface z-(--z-nav) flex h-16 items-center justify-between border-b border-border px-4 md:px-6 relative ${
-        hideOnDesktop ? "lg:hidden md:landscape:hidden" : ""
+      className={`app-surface z-(--z-nav) flex h-16 items-center justify-between border-b border-border px-4 md:px-6 relative pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] ${
+        hideOnDesktop ? "lg:hidden" : ""
       }`}
     >
       <div className="flex items-center gap-3">
         {!hideMenu && (
           <button
             onClick={() => onMenu?.()}
-            className="rounded-md p-2 transition-transform hover:bg-accent active:scale-90 lg:hidden md:landscape:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md transition-transform hover:bg-accent active:scale-90 lg:hidden"
             aria-label="Menu"
           >
             <Menu className="h-4 w-4" />
@@ -2506,7 +2678,7 @@ function Header({
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
-            className={`hidden rounded-md p-2 text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-90 md:portrait:hidden ${sidebarCollapsed ? "md:hidden" : "md:inline-flex"}`}
+            className={`hidden h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-90 ${sidebarCollapsed ? "lg:hidden" : "lg:inline-flex"}`}
             aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
@@ -2515,7 +2687,7 @@ function Header({
         )}
         <button
           onClick={onHome}
-          className="flex items-center gap-2 rounded-md px-1 py-1 text-muted-foreground transition-colors hover:text-foreground"
+          className="flex h-10 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:text-foreground"
           aria-label="Home"
           title="Home"
         >
@@ -2524,7 +2696,7 @@ function Header({
       </div>
 
       {hasFiles && (
-        <div className="absolute left-1/2 -translate-x-1/2 hidden lg:flex md:landscape:flex items-center">
+        <div className="absolute left-1/2 -translate-x-1/2 hidden lg:flex items-center">
           <button
             onClick={onOpenPalette}
             className="w-80 items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground flex"
@@ -2547,7 +2719,7 @@ function Header({
         {hasFiles && (
           <button
             onClick={onOpenPalette}
-            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden md:landscape:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
             aria-label="Search"
           >
             <Search className="h-4 w-4" />
@@ -2559,7 +2731,7 @@ function Header({
             an icon that opens a bottom sheet with the same management options. */}
         {onSwitchWorkspace && (
           <>
-            <div className="hidden items-center gap-2 lg:flex md:landscape:flex">
+            <div className="hidden items-center gap-2 lg:flex">
               <WorkspaceMenu
                 workspaces={workspaces}
                 currentId={currentWorkspaceId ?? null}
@@ -2571,7 +2743,7 @@ function Header({
                 onShare={() => onShareWorkspace?.()}
               />
             </div>
-            <div className="flex items-center gap-2 lg:hidden md:landscape:hidden">
+            <div className="flex items-center gap-2 lg:hidden">
               <WorkspaceSheet
                 workspaces={workspaces}
                 currentId={currentWorkspaceId ?? null}
@@ -2588,7 +2760,7 @@ function Header({
         {onOpenSettings && (
           <button
             onClick={onOpenSettings}
-            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             aria-label="Settings"
             title="Settings"
           >

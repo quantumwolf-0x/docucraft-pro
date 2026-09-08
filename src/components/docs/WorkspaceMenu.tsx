@@ -10,6 +10,7 @@ import {
   Users,
   Settings,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 interface WorkspaceLite {
   id: string;
@@ -25,8 +26,12 @@ interface Props {
   onImport: (file: File) => void;
   onExport: () => void;
   onShare: () => void;
-  /** "pill" = compact header trigger; "sidebar" = full-width name. */
-  variant?: "pill" | "sidebar";
+  /**
+   * "pill" = compact header trigger; "sidebar" = full-width name;
+   * "icon" = the monogram alone, for the collapsed rail where there is no room
+   * for a label but the same menu still has to be reachable.
+   */
+  variant?: "pill" | "sidebar" | "icon";
   /** Callback to open settings (typically rendered in sidebar) */
   onSettings?: () => void;
 }
@@ -50,13 +55,25 @@ export function WorkspaceMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const sidebar = variant === "sidebar";
+  const icon = variant === "icon";
+  // Both rail variants anchor the same way: the trigger sits at the bottom of a
+  // left-hand rail, so the menu opens upward and left-aligned.
+  const leftAnchored = sidebar || icon;
 
   // The menu is portaled to <body> so it escapes every header/content stacking
   // context and can never be painted under a document panel. Because it lives
   // outside the normal flow, we position it manually from the trigger's rect
   // and keep it pinned as the page scrolls or resizes.
-  const MENU_W = 280;
-  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+  const MENU_MAX_W = 280;
+  const GAP = 6;
+  const EDGE = 8;
+  const [pos, setPos] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -64,25 +81,69 @@ export function WorkspaceMenu({
       const el = rootRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      const desired = sidebar ? r.left : r.right - MENU_W; // sidebar left-aligns, pill right-aligns
-      const left = Math.min(Math.max(8, desired), window.innerWidth - MENU_W - 8);
 
-      if (sidebar) {
-        // Pop upwards in the sidebar since it's at the bottom
-        const bottom = window.innerHeight - r.top + 6;
-        setPos({ bottom, left });
+      // Never wider than the viewport allows. A fixed 280 overflowed the right
+      // edge on narrow screens, which is what made the sidebar menu look broken
+      // on small windows and phones.
+      //
+      // In the expanded sidebar the panel is also held clear of the rail's own
+      // right edge: matched to the trigger's width it ended up exactly flush
+      // with the sidebar border, so the two lines merged into one. The trigger
+      // spans the rail, so its width is the rail's usable width.
+      const width = Math.min(
+        MENU_MAX_W,
+        window.innerWidth - EDGE * 2,
+        sidebar ? Math.max(200, r.width - EDGE) : Infinity,
+      );
+      const desired = leftAnchored ? r.left : r.right - width; // rail left-aligns, pill right-aligns
+      const left = Math.min(Math.max(EDGE, desired), window.innerWidth - width - EDGE);
+
+      // Space on each side of the trigger, and the side we would rather use:
+      // upwards in the sidebar (its trigger sits at the bottom of the rail),
+      // downwards for the header pill.
+      const above = r.top - GAP - EDGE;
+      const below = window.innerHeight - r.bottom - GAP - EDGE;
+      const MIN_H = 180;
+
+      // Flip to the other side when the preferred one cannot show a usable
+      // menu. Clamping the height alone was not enough: a short window still
+      // anchored the sidebar menu upwards from a trigger near the bottom, which
+      // put the whole panel above the top edge of the screen.
+      const preferAbove = leftAnchored;
+      const useAbove = preferAbove
+        ? above >= MIN_H || above >= below
+        : !(below >= MIN_H || below >= above);
+
+      if (useAbove) {
+        setPos({
+          bottom: window.innerHeight - r.top + GAP,
+          left,
+          width,
+          maxHeight: Math.max(120, above),
+        });
       } else {
-        setPos({ top: r.bottom + 6, left });
+        setPos({
+          top: r.bottom + GAP,
+          left,
+          width,
+          maxHeight: Math.max(120, below),
+        });
       }
     };
     place();
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
+    // Mobile browsers resize the visual viewport (URL bar, keyboard) without
+    // firing a window resize, which left the menu detached from its trigger.
+    window.visualViewport?.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("scroll", place);
     return () => {
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("scroll", place);
     };
-  }, [open, sidebar]);
+  }, [open, leftAnchored, sidebar]);
 
   useEffect(() => {
     if (!open) return;
@@ -122,14 +183,35 @@ export function WorkspaceMenu({
   return (
     <div ref={rootRef} className={`relative ${sidebar ? "min-w-0 flex-1 z-(--z-dropdown)" : ""}`}>
       {sidebar ? (
+        // The account-row shape from the reference: a round monogram, the
+        // workspace name with a quiet second line, and the whole row as the
+        // trigger.
         <button
           onClick={() => setOpen((o) => !o)}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-sidebar-accent"
           title="Workspaces"
         >
-          <FolderOpen className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{current?.name ?? "Localdox"}</span>
-          <ChevronDown className="h-4 w-4 shrink-0 opacity-70" />
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground">
+            {initials(current?.name ?? "Localdox")}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-sidebar-foreground">
+              {current?.name ?? "Localdox"}
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">Workspace</span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground opacity-70" />
+        </button>
+      ) : icon ? (
+        // Collapsed rail: the monogram alone, opening the same menu the
+        // expanded sidebar's row does.
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          aria-label="Workspaces"
+          title={current?.name ?? "Workspace"}
+        >
+          {initials(current?.name ?? "Localdox")}
         </button>
       ) : (
         <button
@@ -154,57 +236,101 @@ export function WorkspaceMenu({
               top: pos.top,
               bottom: pos.bottom,
               left: pos.left,
-              width: MENU_W,
+              width: pos.width,
+              maxHeight: pos.maxHeight,
             }}
-            className="z-(--z-dropdown) overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
+            className="z-(--z-dropdown) flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
           >
-            <div className="max-h-[70vh] overflow-y-auto p-2">
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {/* Header: the workspace you are in, echoing the trigger. */}
               {current && (
-                <div className="group relative mb-1 flex items-center justify-between rounded-xl bg-accent px-3 py-2 transition-colors hover:bg-accent/80">
-                  <button
-                    onClick={() => setOpen(false)}
-                    className="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground"
-                  >
-                    {current.name}
-                  </button>
-                  <Check className="ml-2 h-4 w-4 shrink-0 text-foreground" />
+                <div className="flex items-center gap-3 px-2 py-2">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground">
+                    {initials(current.name)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-foreground">
+                      {current.name}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">Workspace</span>
+                  </span>
+                  <Check className="h-4 w-4 shrink-0 text-muted-foreground" />
                 </div>
               )}
 
+              {/* Switching: the other workspaces, when there are any. */}
               {workspaces.length > 1 && (
-                <div className="flex flex-col gap-0.5">
-                  {workspaces
-                    .filter((w) => w.id !== currentId)
-                    .map((w) => (
-                      <button
-                        key={w.id}
-                        onClick={() => {
-                          onSwitch(w.id);
-                          setOpen(false);
-                        }}
-                        className="truncate rounded-xl px-3 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent"
-                      >
-                        {w.name}
-                      </button>
-                    ))}
-                </div>
+                <>
+                  <div className="my-1.5 h-px bg-border" />
+                  <div className="flex flex-col">
+                    {workspaces
+                      .filter((w) => w.id !== currentId)
+                      .map((w) => (
+                        <MenuRow
+                          key={w.id}
+                          icon={FolderOpen}
+                          label={w.name}
+                          onClick={() => {
+                            onSwitch(w.id);
+                            setOpen(false);
+                          }}
+                        />
+                      ))}
+                  </div>
+                </>
               )}
 
-              {/* Creating a workspace is the same kind of act as switching to
-                  one, so it sits in the list rather than only in the footer
-                  strip, where it read as a tool rather than a destination. */}
-              {!creating && (
-                <button
+              <div className="my-1.5 h-px bg-border" />
+
+              {/* What you do to this workspace, then what you do to the app. */}
+              <div className="flex flex-col">
+                <MenuRow
+                  icon={Upload}
+                  label="Import workspace"
+                  onClick={() => fileRef.current?.click()}
+                />
+                <MenuRow
+                  icon={Download}
+                  label="Export workspace"
                   onClick={() => {
-                    setCreating(true);
-                    setNewName("");
+                    onExport();
+                    setOpen(false);
                   }}
-                  className="mt-0.5 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <PlusCircle className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-                  New workspace
-                </button>
-              )}
+                />
+                <MenuRow
+                  icon={Users}
+                  label="Share workspace"
+                  onClick={() => {
+                    onShare();
+                    setOpen(false);
+                  }}
+                />
+              </div>
+
+              <div className="my-1.5 h-px bg-border" />
+
+              <div className="flex flex-col">
+                {!creating && (
+                  <MenuRow
+                    icon={PlusCircle}
+                    label="New workspace"
+                    onClick={() => {
+                      setCreating(true);
+                      setNewName("");
+                    }}
+                  />
+                )}
+                {onSettings && (
+                  <MenuRow
+                    icon={Settings}
+                    label="Settings"
+                    onClick={() => {
+                      onSettings();
+                      setOpen(false);
+                    }}
+                  />
+                )}
+              </div>
             </div>
 
             {creating && (
@@ -236,38 +362,6 @@ export function WorkspaceMenu({
                 </div>
               </div>
             )}
-
-            {/* New workspace lives in the list above, beside the workspaces it
-                would join; this strip is for what you do *to* a workspace. */}
-            <div className="flex border-t border-border bg-muted/50">
-              <ActionButton icon={Upload} label="Import" onClick={() => fileRef.current?.click()} />
-              <ActionButton
-                icon={Download}
-                label="Export"
-                onClick={() => {
-                  onExport();
-                  setOpen(false);
-                }}
-              />
-              <ActionButton
-                icon={Users}
-                label="Share"
-                onClick={() => {
-                  onShare();
-                  setOpen(false);
-                }}
-              />
-              {onSettings && (
-                <ActionButton
-                  icon={Settings}
-                  label="Settings"
-                  onClick={() => {
-                    onSettings();
-                    setOpen(false);
-                  }}
-                />
-              )}
-            </div>
           </div>,
           document.body,
         )}
@@ -290,22 +384,36 @@ export function WorkspaceMenu({
   );
 }
 
-function ActionButton({
+/** One line of the menu: icon, label, full-width hit area. */
+function MenuRow({
   icon: Icon,
   label,
   onClick,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex flex-1 flex-col items-center justify-center gap-1.5 py-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
     >
-      <Icon className="h-4 w-4" strokeWidth={1.5} />
-      {label}
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+      <span className="min-w-0 truncate">{label}</span>
     </button>
   );
+}
+
+/**
+ * Monogram for the workspace avatar: the first letter of each of the first two
+ * words, so "My workspace" reads as MW and a single-word name keeps one letter.
+ */
+function initials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word[0] ?? "")
+    .join("");
 }
