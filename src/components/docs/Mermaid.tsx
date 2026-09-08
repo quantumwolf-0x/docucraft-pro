@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import mermaid from "mermaid";
-import { ZoomIn, ZoomOut, Maximize2, Download, X } from "lucide-react";
+import { Download, Home, Maximize2, Minus, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
 
 let counter = 0;
+
+/** Breathing room kept around a fitted diagram, in CSS pixels. */
+const FIT_PADDING = 24;
+/** Ceiling for the opening fit. Past this, a sparse diagram reads as zoomed-in
+ *  rather than large; the +/− buttons still go all the way to 8x. */
+const MAX_FIT_ZOOM = 2.2;
 
 function configure(dark: boolean) {
   mermaid.initialize({
@@ -24,9 +30,7 @@ function quoteErEntities(src: string): string {
   return src
     .split("\n")
     .map((line) => {
-      const rel = line.match(
-        /^(\s*)([\w".:-]+)(\s+)(\S*--\S*)(\s+)([\w".:-]+)(\s*:\s*.*)$/,
-      );
+      const rel = line.match(/^(\s*)([\w".:-]+)(\s+)(\S*--\S*)(\s+)([\w".:-]+)(\s*:\s*.*)$/);
       if (!rel) return line;
       return rel[1] + q(rel[2]) + rel[3] + rel[4] + rel[5] + q(rel[6]) + rel[7];
     })
@@ -134,9 +138,15 @@ export function Mermaid({ code }: { code: string }) {
   }
 
   const downloadBtn = (
-    <IconBtn onClick={downloadSvg} label="Download SVG">
-      <Download className="h-3.5 w-3.5" />
-    </IconBtn>
+    <button
+      type="button"
+      onClick={downloadSvg}
+      aria-label="Download SVG"
+      title="Download SVG"
+      className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      <Download className="h-4 w-4" />
+    </button>
   );
 
   return (
@@ -146,7 +156,9 @@ export function Mermaid({ code }: { code: string }) {
           svg={svg}
           extraControls={
             <>
-              {downloadBtn}
+              <IconBtn onClick={downloadSvg} label="Download SVG">
+                <Download className="h-3.5 w-3.5" />
+              </IconBtn>
               <IconBtn onClick={() => setFullscreen(true)} label="Fullscreen">
                 <Maximize2 className="h-3.5 w-3.5" />
               </IconBtn>
@@ -161,22 +173,41 @@ export function Mermaid({ code }: { code: string }) {
           // Portal to <body>: an ancestor (the article carries a GSAP transform)
           // would otherwise become the containing block for this fixed overlay,
           // trapping it inside the article box instead of the viewport.
-          <div className="fixed inset-0 z-[70] flex flex-col bg-background">
-          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-            <span className="text-sm font-medium text-muted-foreground">
-              Diagram — zoom with the +/− buttons, drag to move
-            </span>
-            <button
+          // Same dialog shell as Settings, so every full-view layer in the app
+          // reads as one surface rather than a bespoke takeover per feature.
+          <div className="fixed inset-0 z-(--z-overlay) flex items-center justify-center p-0 sm:p-4">
+            <div
+              className="absolute inset-0 bg-foreground/30 backdrop-blur-sm animate-in fade-in duration-150"
               onClick={() => setFullscreen(false)}
-              aria-label="Close fullscreen"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground active:scale-95"
+              aria-hidden
+            />
+
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Diagram"
+              // Wider and taller than the Settings shell it otherwise matches:
+              // a diagram is the content here, not a column of form rows, so it
+              // takes as much of the viewport as it can while staying a dialog.
+              className="relative flex h-full w-full flex-col overflow-hidden border-border bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-150 sm:h-[92vh] sm:max-w-[min(1600px,95vw)] sm:rounded-2xl sm:border"
             >
-              <X className="h-4 w-4" />
-              Close
-            </button>
-          </div>
-            <div className="min-h-0 flex-1">
-              <Stage svg={svg} fill extraControls={downloadBtn} />
+              <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 sm:px-6">
+                <h1 className="text-base font-semibold tracking-tight text-foreground">Diagram</h1>
+                <div className="-mr-1 flex items-center gap-1">
+                  {downloadBtn}
+                  <button
+                    type="button"
+                    onClick={() => setFullscreen(false)}
+                    aria-label="Close diagram"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </header>
+              <div className="min-h-0 flex-1">
+                <Stage svg={svg} fill />
+              </div>
             </div>
           </div>,
           document.body,
@@ -198,62 +229,141 @@ function Stage({
 }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  // Wheel-zoom stays off until the reader opts in via a zoom button, so
-  // scrolling the page over a diagram scrolls the page (not the diagram).
-  const [zoomEnabled, setZoomEnabled] = useState(false);
-  const zoomEnabledRef = useRef(false);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
+  /** Scale the diagram so it fills the stage without overflowing it. It grows
+   *  as well as shrinks — mermaid sizes a small graph to its content, which in
+   *  a large dialog would otherwise leave the diagram marooned in empty space.
+   *  Vector art, so scaling up costs no sharpness; the cap just stops a
+   *  two-box diagram from turning into wall art. */
+  const fit = useCallback(() => {
+    const stage = stageRef.current;
+    const drawing = contentRef.current?.querySelector("svg");
+    if (!stage || !drawing) return;
+    const box = drawing.getBoundingClientRect();
+    // The rect is already scaled by the live transform; divide it back out to
+    // recover the diagram's natural size.
+    const naturalWidth = box.width / zoom,
+      naturalHeight = box.height / zoom;
+    if (!naturalWidth || !naturalHeight) return;
+    const next = Math.min(
+      MAX_FIT_ZOOM,
+      (stage.clientWidth - FIT_PADDING * 2) / naturalWidth,
+      (stage.clientHeight - FIT_PADDING * 2) / naturalHeight,
+    );
+    setZoom(Math.max(0.3, next));
+    setPan({ x: 0, y: 0 });
+  }, [zoom]);
+
+  // The full view opens fitted, so the whole diagram is visible at a glance
+  // rather than cropped by the dialog at 1:1.
   useEffect(() => {
-    zoomEnabledRef.current = zoomEnabled;
-  }, [zoomEnabled]);
+    if (!fill || !svg) return;
+    // After the SVG has been painted, so it can be measured.
+    const raf = requestAnimationFrame(fit);
+    return () => cancelAnimationFrame(raf);
+    // Deliberately keyed to the diagram, not to `fit` — refitting on every zoom
+    // change would fight the user's own zooming.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fill, svg]);
 
-  // Wheel-to-zoom via a non-passive native listener so we can preventDefault
-  // (React's onWheel is passive and would let the page scroll instead). Only
-  // hijack the wheel once zoom has been enabled; otherwise let the page scroll.
+  // Zooming is the +/− buttons' job only. Pinch (which trackpads report as
+  // ctrl+wheel, Safari as gesture* events) is swallowed here rather than acted
+  // on: left alone it becomes a browser page zoom that outlives the viewer and
+  // leaves the document behind it scaled. A plain wheel still scrolls the page.
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (!zoomEnabledRef.current) return;
-      e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      setZoom((z) => Math.min(8, Math.max(0.3, z * factor)));
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
     };
+    const swallow = (e: Event) => e.preventDefault();
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("gesturestart", swallow);
+    el.addEventListener("gesturechange", swallow);
+    el.addEventListener("gestureend", swallow);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", swallow);
+      el.removeEventListener("gesturechange", swallow);
+      el.removeEventListener("gestureend", swallow);
+    };
   }, []);
 
-  const zoomIn = () => {
-    setZoomEnabled(true);
-    setZoom((z) => Math.min(8, z * 1.25));
-  };
-  const zoomOut = () => {
-    setZoomEnabled(true);
-    setZoom((z) => Math.max(0.3, z / 1.25));
-  };
+  const zoomIn = () => setZoom((z) => Math.min(8, z * 1.25));
+  const zoomOut = () => setZoom((z) => Math.max(0.3, z / 1.25));
+  // "Home" restores the view the dialog opened with, which is the fitted one.
+  const reset = fill
+    ? fit
+    : () => {
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+      };
+
+  // `fit` is rebuilt whenever the zoom changes, so the keydown listener below —
+  // registered once — would otherwise keep calling a stale copy and refit
+  // against an out-of-date scale. The ref always points at the current one.
+  const resetRef = useRef(reset);
+  resetRef.current = reset;
+
+  // Fullscreen owns the keyboard zoom shortcuts too, so cmd/ctrl +/-/0 scales
+  // the diagram rather than the document underneath it.
+  useEffect(() => {
+    if (!fill) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        zoomOut();
+      } else if (e.key === "0") {
+        e.preventDefault();
+        resetRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [fill]);
 
   return (
     <div className="group/stage relative flex h-full w-full flex-col">
-      <div
-        className={`absolute right-2 top-2 z-10 flex items-center gap-1 transition-opacity ${
-          fill ? "opacity-100" : "opacity-0 group-hover/stage:opacity-100"
-        }`}
-      >
-        <IconBtn onClick={zoomIn} label="Zoom in">
-          <ZoomIn className="h-3.5 w-3.5" />
-        </IconBtn>
-        <IconBtn onClick={zoomOut} label="Zoom out">
-          <ZoomOut className="h-3.5 w-3.5" />
-        </IconBtn>
-        {extraControls}
-      </div>
+      {/* Full view borrows the mind map's segmented control so the two canvases
+          are driven the same way; inline keeps the lighter hover-only icons. */}
+      {fill ? (
+        <div className="absolute bottom-4 right-4 z-10 flex overflow-hidden rounded-md border border-border bg-background/95 shadow-sm backdrop-blur">
+          <StageControl label="Zoom in" onClick={zoomIn}>
+            <Plus className="h-3.5 w-3.5" />
+          </StageControl>
+          <StageControl label="Zoom out" onClick={zoomOut}>
+            <Minus className="h-3.5 w-3.5" />
+          </StageControl>
+          <StageControl label="Reset view" onClick={reset}>
+            <Home className="h-3.5 w-3.5" />
+          </StageControl>
+        </div>
+      ) : (
+        <div className="mermaid-controls absolute right-2 top-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/stage:opacity-100">
+          <IconBtn onClick={zoomIn} label="Zoom in">
+            <ZoomIn className="h-3.5 w-3.5" />
+          </IconBtn>
+          <IconBtn onClick={zoomOut} label="Zoom out">
+            <ZoomOut className="h-3.5 w-3.5" />
+          </IconBtn>
+          {extraControls}
+        </div>
+      )}
       <div
         ref={stageRef}
         className={`flex flex-1 cursor-grab items-center justify-center overflow-hidden p-4 active:cursor-grabbing ${
-          fill ? "" : "min-h-[160px]"
+          fill ? "" : "min-h-40"
         }`}
+        // Blocks touch pinch-zoom (which would zoom the page, not the diagram).
+        // Inline still allows one-finger scrolling past the diagram.
+        style={{ touchAction: fill ? "none" : "pan-x pan-y" }}
         onMouseDown={(e) => (dragRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y })}
         onMouseMove={(e) => {
           if (!dragRef.current) return;
@@ -263,6 +373,7 @@ function Stage({
         onMouseLeave={() => (dragRef.current = null)}
       >
         <div
+          ref={contentRef}
           className="docs-mermaid"
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
@@ -272,6 +383,28 @@ function Stage({
         />
       </div>
     </div>
+  );
+}
+
+/** One cell of the full-view segmented zoom control — matches MindMapView. */
+function StageControl({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="flex h-8 w-8 items-center justify-center border-l border-border text-muted-foreground transition-colors first:border-l-0 hover:bg-accent hover:text-foreground"
+    >
+      {children}
+    </button>
   );
 }
 

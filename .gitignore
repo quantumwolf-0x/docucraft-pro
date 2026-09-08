@@ -15,6 +15,10 @@ dist-ssr
 .tanstack/**
 .nitro
 *.local
+.vite/
+coverage/
+graphify-out/
+.firebase/
 
 # Wrangler / Cloudflare
 .wrangler/
@@ -31,3 +35,9 @@ dist-ssr
 *.sln
 *.sw?
 .gstack/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+!.env.*.example

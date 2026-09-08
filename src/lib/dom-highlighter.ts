@@ -10,6 +10,17 @@ export interface Highlight {
   /** Character offsets within the page's rendered content. */
   start?: number;
   end?: number;
+  /**
+   * Rendered text immediately before/after the highlight. Offsets alone are a
+   * lie the moment the document is edited — everything after an insertion
+   * shifts. The quote plus its surroundings identifies the same passage no
+   * matter how much text moved, so highlights re-anchor themselves instead of
+   * sliding onto whatever now sits at the old offsets.
+   */
+  prefix?: string;
+  suffix?: string;
+  /** Set when the highlighted text no longer exists in the document at all. */
+  orphaned?: boolean;
 }
 
 /** Palette + the CSS ::highlight() group name each color maps to. */

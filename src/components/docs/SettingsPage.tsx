@@ -1,0 +1,732 @@
+import { useState, useEffect } from "react";
+import {
+  Trash2,
+  Star,
+  Folder,
+  Database,
+  ArrowRight,
+  Palette,
+  Check,
+  ScrollText,
+  Files,
+  Sparkles,
+  Archive,
+  Pencil,
+  X,
+} from "lucide-react";
+import { AiSettings } from "./ai/AiSettings";
+import { Section, Group, Row, Empty, IconButton } from "./settings/primitives";
+import type { Highlight } from "@/lib/dom-highlighter";
+import type { MdFile } from "@/lib/markdown-utils";
+import type { ThemePref, ReadingMode, ReadingFont } from "@/lib/persistence";
+import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-items";
+import { STORAGE_QUOTA_FRACTION, formatBytes } from "@/lib/storage-limits";
+
+export interface SettingsPageProps {
+  workspaces: { id: string; name: string }[];
+  currentWorkspaceId: string | null;
+  onRenameWorkspace: (id: string, name: string) => void;
+  onDeleteWorkspace: (id: string) => void;
+  onClearStorage: () => void;
+  saved: SavedEntry[];
+  onOpenSaved: (item: SavedItem) => void;
+  onRemoveSaved: (id: string) => void;
+  onClearSaved: () => void;
+  highlights: Highlight[];
+  onRemoveHighlight: (id: string) => void;
+  onClearHighlights: () => void;
+  onNavigate: (fileId: string, subtopicId?: string) => void;
+  files: MdFile[];
+  onOpenWorkspace: (id: string) => void;
+  theme: ThemePref;
+  onSetTheme: (theme: ThemePref) => void;
+  readingMode: ReadingMode;
+  onSetReadingMode: (mode: ReadingMode) => void;
+  readingFont: ReadingFont;
+  onSetReadingFont: (font: ReadingFont) => void;
+  onToggleArchiveFile: (id: string) => void;
+  /** Dismiss the dialog. */
+  onClose: () => void;
+}
+
+type TabId = "appearance" | "ai" | "workspace" | "archive" | "storage";
+
+const TABS = [
+  { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "ai", label: "Ask AI", icon: Sparkles },
+  { id: "workspace", label: "Workspace", icon: Folder },
+  { id: "archive", label: "Archive", icon: Archive },
+  { id: "storage", label: "Storage", icon: Database },
+] as const satisfies readonly { id: TabId; label: string; icon: typeof Palette }[];
+
+export function SettingsPage({
+  workspaces,
+  currentWorkspaceId,
+  onRenameWorkspace,
+  onDeleteWorkspace,
+  onClearStorage,
+  saved,
+  onOpenSaved,
+  onRemoveSaved,
+  onClearSaved,
+  highlights,
+  onRemoveHighlight,
+  onClearHighlights,
+  onNavigate,
+  files,
+  onOpenWorkspace,
+  theme,
+  onSetTheme,
+  readingMode,
+  onSetReadingMode,
+  readingFont,
+  onSetReadingFont,
+  onToggleArchiveFile,
+  onClose,
+}: SettingsPageProps) {
+  const [activeTab, setActiveTab] = useState<TabId>("appearance");
+
+  // Escape closes it, like every other dismissable layer in the app.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // The page underneath must not scroll while the dialog is over it.
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-(--z-overlay) flex items-center justify-center p-0 sm:p-6">
+      {/* Click-away. The dialog itself stops propagation by being a sibling
+          rather than a child, so no click inside it can reach this. */}
+      <div
+        className="absolute inset-0 bg-foreground/30 backdrop-blur-sm animate-in fade-in duration-150"
+        onClick={onClose}
+        aria-hidden
+      />
+
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        className="relative flex h-full w-full flex-col overflow-hidden border-border bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-150 sm:h-[min(640px,90vh)] sm:max-w-4xl sm:rounded-2xl sm:border"
+      >
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 sm:px-6">
+          <h1 className="text-base font-semibold tracking-tight text-foreground">Settings</h1>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close settings"
+            className="-mr-1 flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          {/* Left rail on desktop; a scrollable chip row on phones, where a
+              vertical rail would eat half the dialog. */}
+          <nav
+            role="tablist"
+            aria-label="Settings sections"
+            className="flex shrink-0 gap-1 overflow-x-auto border-b border-border p-2 scrollbar-hide sm:w-52 sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:border-b-0 sm:border-r sm:p-3"
+          >
+            {TABS.map((tab) => {
+              const Icon = tab.icon;
+              const active = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-[13px] font-medium transition-colors sm:w-full ${
+                    active
+                      ? "bg-accent text-foreground"
+                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-7 sm:py-6">
+            {activeTab === "appearance" && (
+              <AppearanceSettings
+                theme={theme}
+                onSetTheme={onSetTheme}
+                readingMode={readingMode}
+                onSetReadingMode={onSetReadingMode}
+                readingFont={readingFont}
+                onSetReadingFont={onSetReadingFont}
+              />
+            )}
+            {activeTab === "ai" && <AiSettings />}
+            {activeTab === "workspace" && (
+              <div className="space-y-10">
+                <WorkspaceSettings
+                  workspaces={workspaces}
+                  currentWorkspaceId={currentWorkspaceId}
+                  onRename={onRenameWorkspace}
+                  onDelete={onDeleteWorkspace}
+                  onOpenWorkspace={onOpenWorkspace}
+                />
+                <SavedSettings
+                  saved={saved}
+                  onOpen={onOpenSaved}
+                  onRemove={onRemoveSaved}
+                  onClearAll={onClearSaved}
+                />
+                <HighlightSettings
+                  highlights={highlights}
+                  files={files}
+                  onRemove={onRemoveHighlight}
+                  onClearAll={onClearHighlights}
+                  onNavigate={onNavigate}
+                />
+              </div>
+            )}
+            {activeTab === "archive" && (
+              <ArchiveSettings files={files} onUnarchive={onToggleArchiveFile} />
+            )}
+            {activeTab === "storage" && <StorageSettings onClearStorage={onClearStorage} />}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Swatch previews approximate each theme so the picker reads at a glance; the
+// applied theme itself is driven by the CSS token sets in styles.css.
+const READER_THEME_META: {
+  id: ThemePref;
+  label: string;
+  bg: string;
+  fg: string;
+  muted: string;
+}[] = [
+  { id: "light", label: "Light", bg: "#ffffff", fg: "#1c1c28", muted: "#6b7280" },
+  { id: "sepia", label: "Sepia", bg: "#f4ecd8", fg: "#4a3f35", muted: "#8a7a68" },
+  { id: "dark", label: "Dark", bg: "#0f1420", fg: "#eceef2", muted: "#9aa3b2" },
+  { id: "nord", label: "Nord", bg: "#2e3440", fg: "#eceff4", muted: "#a9b3c4" },
+  { id: "black", label: "Black", bg: "#000000", fg: "#e8e8e8", muted: "#b3b3b3" },
+];
+
+// Explicit font stacks so each preview shows its own face regardless of the
+// currently applied reading font.
+const READING_FONT_META: { id: ReadingFont; label: string; family: string }[] = [
+  {
+    id: "system",
+    label: "System",
+    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  },
+  { id: "serif", label: "Source Serif", family: '"Source Serif 4", ui-serif, Georgia, serif' },
+  { id: "newsreader", label: "Newsreader", family: '"Newsreader", ui-serif, Georgia, serif' },
+  { id: "sans", label: "Inter", family: '"Inter", ui-sans-serif, system-ui, sans-serif' },
+  {
+    id: "hyperlegible",
+    label: "Atkinson Hyperlegible",
+    family: '"Atkinson Hyperlegible", ui-sans-serif, sans-serif',
+  },
+];
+
+const READING_MODE_META: { id: ReadingMode; label: string; hint: string; icon: typeof Files }[] = [
+  { id: "paginated", label: "Paged sections", hint: "Prev / next per section", icon: Files },
+  { id: "single", label: "Single page", hint: "Everything on one scroll", icon: ScrollText },
+];
+
+function AppearanceSettings({
+  theme,
+  onSetTheme,
+  readingMode,
+  onSetReadingMode,
+  readingFont,
+  onSetReadingFont,
+}: {
+  theme: ThemePref;
+  onSetTheme: (theme: ThemePref) => void;
+  readingMode: ReadingMode;
+  onSetReadingMode: (mode: ReadingMode) => void;
+  readingFont: ReadingFont;
+  onSetReadingFont: (font: ReadingFont) => void;
+}) {
+  return (
+    <div className="space-y-10">
+      <Section title="Theme">
+        {/* The swatch is the whole control — colour carries the meaning, so the
+            per-theme description text is gone. */}
+        <div className="grid grid-cols-5 gap-2 sm:gap-3">
+          {READER_THEME_META.map((t) => {
+            const active = theme === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => onSetTheme(t.id)}
+                aria-pressed={active}
+                title={t.label}
+                className="group flex flex-col items-center gap-2 outline-none"
+              >
+                <span
+                  className={`flex aspect-4/3 w-full items-center justify-center rounded-lg border transition-shadow ${
+                    active
+                      ? "border-primary ring-2 ring-primary/30"
+                      : "border-border group-hover:border-foreground/25"
+                  }`}
+                  style={{ backgroundColor: t.bg, color: t.fg }}
+                >
+                  <span
+                    className="text-base font-medium"
+                    style={{ fontFamily: "var(--font-heading)" }}
+                  >
+                    Aa
+                  </span>
+                </span>
+                <span
+                  className={`text-xs ${active ? "font-medium text-foreground" : "text-muted-foreground"}`}
+                >
+                  {t.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section title="Reading font">
+        {/* Each row previews its own face in the label itself — no separate
+            "Ag" specimen block needed. */}
+        <Group>
+          {READING_FONT_META.map((f) => {
+            const active = readingFont === f.id;
+            return (
+              <button
+                key={f.id}
+                onClick={() => onSetReadingFont(f.id)}
+                aria-pressed={active}
+                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-accent/40"
+              >
+                <span
+                  className="truncate text-base text-foreground"
+                  style={{ fontFamily: f.family }}
+                >
+                  {f.label}
+                </span>
+                {active && <Check className="h-4 w-4 shrink-0 text-primary" />}
+              </button>
+            );
+          })}
+        </Group>
+      </Section>
+
+      <Section title="Layout">
+        <Group>
+          {READING_MODE_META.map((m) => {
+            const active = readingMode === m.id;
+            const Icon = m.icon;
+            return (
+              <button
+                key={m.id}
+                onClick={() => onSetReadingMode(m.id)}
+                aria-pressed={active}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
+              >
+                <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-foreground">{m.label}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{m.hint}</span>
+                </span>
+                {active && <Check className="h-4 w-4 shrink-0 text-primary" />}
+              </button>
+            );
+          })}
+        </Group>
+      </Section>
+    </div>
+  );
+}
+
+function WorkspaceSettings({
+  workspaces,
+  currentWorkspaceId,
+  onRename,
+  onDelete,
+  onOpenWorkspace,
+}: {
+  workspaces: { id: string; name: string }[];
+  currentWorkspaceId: string | null;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+  onOpenWorkspace: (id: string) => void;
+}) {
+  return (
+    <Section title="Workspaces">
+      <Group>
+        {workspaces.map((ws) => (
+          <WorkspaceItemRow
+            key={ws.id}
+            workspace={ws}
+            isCurrent={ws.id === currentWorkspaceId}
+            onRename={onRename}
+            onDelete={onDelete}
+            onOpen={onOpenWorkspace}
+            canDelete={workspaces.length > 1}
+          />
+        ))}
+      </Group>
+    </Section>
+  );
+}
+
+function WorkspaceItemRow({
+  workspace,
+  isCurrent,
+  onRename,
+  onDelete,
+  onOpen,
+  canDelete,
+}: {
+  workspace: { id: string; name: string };
+  isCurrent: boolean;
+  onRename: (id: string, name: string) => void;
+  onDelete: (id: string) => void;
+  onOpen: (id: string) => void;
+  canDelete: boolean;
+}) {
+  // Rename is progressive disclosure: the input only exists once you ask for
+  // it, so the default state is a clean list of names.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(workspace.name);
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next && next !== workspace.name) onRename(workspace.id, next);
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    setDraft(workspace.name);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2.5">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") cancel();
+          }}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+          placeholder="Workspace name"
+        />
+        <button
+          onClick={commit}
+          disabled={!draft.trim()}
+          className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
+        >
+          Save
+        </button>
+        <IconButton onClick={cancel} label="Cancel rename">
+          <X className="h-4 w-4" />
+        </IconButton>
+      </div>
+    );
+  }
+
+  return (
+    <Row
+      label={
+        <span className="flex items-center gap-2">
+          {workspace.name}
+          {isCurrent && <span className="text-xs text-muted-foreground">Current</span>}
+        </span>
+      }
+      control={
+        <>
+          {!isCurrent && (
+            <button
+              onClick={() => onOpen(workspace.id)}
+              className="rounded-md px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+            >
+              Open
+            </button>
+          )}
+          <IconButton onClick={() => setEditing(true)} label={`Rename ${workspace.name}`}>
+            <Pencil className="h-4 w-4" />
+          </IconButton>
+          <IconButton
+            onClick={() => {
+              if (window.confirm(`Delete workspace "${workspace.name}"?`)) onDelete(workspace.id);
+            }}
+            label={`Delete ${workspace.name}`}
+            danger
+            disabled={isCurrent || !canDelete}
+            title={
+              isCurrent
+                ? "Cannot delete the active workspace"
+                : !canDelete
+                  ? "Cannot delete your only workspace"
+                  : "Delete workspace"
+            }
+          >
+            <Trash2 className="h-4 w-4" />
+          </IconButton>
+        </>
+      }
+    />
+  );
+}
+
+/** Shared "Clear all" affordance for the list sections. */
+function ClearAll({ onClick, confirm }: { onClick: () => void; confirm: string }) {
+  return (
+    <button
+      onClick={() => {
+        if (window.confirm(confirm)) onClick();
+      }}
+      className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive"
+    >
+      Clear all
+    </button>
+  );
+}
+
+function StorageSettings({ onClearStorage }: { onClearStorage: () => void }) {
+  const [usage, setUsage] = useState<number | null>(null);
+  const [quota, setQuota] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then((estimate) => {
+        setUsage(estimate.usage || 0);
+        setQuota(estimate.quota || 0);
+      });
+    }
+  }, []);
+
+  const cap = quota != null ? Math.floor(quota * STORAGE_QUOTA_FRACTION) : null;
+  const pct = usage != null && cap ? Math.min(100, (usage / cap) * 100) : null;
+
+  return (
+    <div className="space-y-10">
+      <Section title="Storage">
+        <Group>
+          <div className="px-4 py-3.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-sm text-foreground">On this device</span>
+              <span className="text-sm tabular-nums text-muted-foreground">
+                {usage !== null && cap !== null
+                  ? `${formatBytes(usage)} of ${formatBytes(cap)}`
+                  : "Calculating…"}
+              </span>
+            </div>
+            {pct !== null && (
+              <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-500"
+                  style={{ width: `${Math.max(pct, 1)}%` }}
+                />
+              </div>
+            )}
+          </div>
+        </Group>
+      </Section>
+
+      <Section
+        title="Danger zone"
+        description="Permanently deletes every workspace, file, highlight, saved item and preference stored in this browser. This cannot be undone."
+      >
+        <Group>
+          <Row
+            label="Clear all data"
+            control={
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Are you absolutely sure you want to clear ALL data on this device?",
+                    )
+                  ) {
+                    onClearStorage();
+                  }
+                }}
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
+              >
+                Clear
+              </button>
+            }
+          />
+        </Group>
+      </Section>
+    </div>
+  );
+}
+
+function SavedSettings({
+  saved,
+  onOpen,
+  onRemove,
+  onClearAll,
+}: {
+  saved: SavedEntry[];
+  onOpen: (item: SavedItem) => void;
+  onRemove: (id: string) => void;
+  onClearAll: () => void;
+}) {
+  return (
+    <Section
+      title="Saved"
+      action={
+        saved.length > 0 && <ClearAll onClick={onClearAll} confirm="Clear all saved items?" />
+      }
+    >
+      <Group>
+        {saved.length === 0 ? (
+          <Empty>Nothing saved yet.</Empty>
+        ) : (
+          saved.map((item) => (
+            <div
+              key={item.id}
+              className="flex items-center gap-2 pr-2 transition-colors hover:bg-accent/40"
+            >
+              <button
+                onClick={() => onOpen(item)}
+                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left"
+                title={item.text || item.title}
+              >
+                <Star className="h-4 w-4 shrink-0 fill-gold text-gold" />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-foreground">{item.title}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {savedTypeLabel(item)} · {item.fileName}
+                    {item.orphaned ? " · no longer in the document" : ""}
+                  </span>
+                </span>
+              </button>
+              <IconButton onClick={() => onRemove(item.id)} label="Remove saved item" danger>
+                <Trash2 className="h-4 w-4" />
+              </IconButton>
+            </div>
+          ))
+        )}
+      </Group>
+    </Section>
+  );
+}
+
+function HighlightSettings({
+  highlights,
+  files,
+  onRemove,
+  onClearAll,
+  onNavigate,
+}: {
+  highlights: Highlight[];
+  files: MdFile[];
+  onRemove: (id: string) => void;
+  onClearAll: () => void;
+  onNavigate: (fileId: string, subtopicId?: string) => void;
+}) {
+  return (
+    <Section
+      title="Highlights"
+      action={
+        highlights.length > 0 && <ClearAll onClick={onClearAll} confirm="Clear all highlights?" />
+      }
+    >
+      <Group>
+        {highlights.length === 0 ? (
+          <Empty>No highlights yet.</Empty>
+        ) : (
+          highlights.map((h) => {
+            const file = files.find((f) => f.id === h.fileId);
+            return (
+              <div
+                key={h.id}
+                className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-accent/40"
+              >
+                {/* The colour dot is the only chrome the highlight needs. */}
+                <span
+                  className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: h.color }}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-foreground">{h.text}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {file?.name.replace(/\.(md|markdown|mdx|txt)$/i, "") || "Unknown file"}
+                    {h.label ? ` · ${h.label}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <IconButton
+                    onClick={() => onNavigate(h.fileId, h.subtopicId)}
+                    label="Go to highlight"
+                  >
+                    <ArrowRight className="h-4 w-4" />
+                  </IconButton>
+                  <IconButton onClick={() => onRemove(h.id)} label="Remove highlight" danger>
+                    <Trash2 className="h-4 w-4" />
+                  </IconButton>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </Group>
+    </Section>
+  );
+}
+
+function ArchiveSettings({
+  files,
+  onUnarchive,
+}: {
+  files: MdFile[];
+  onUnarchive: (id: string) => void;
+}) {
+  const archivedFiles = files.filter((f) => f.isArchived);
+
+  return (
+    <Section
+      title="Archived"
+      description="Archived files are hidden from the sidebar but stay available as embedded resources."
+    >
+      <Group>
+        {archivedFiles.length === 0 ? (
+          <Empty>No archived files.</Empty>
+        ) : (
+          archivedFiles.map((file) => (
+            <Row
+              key={file.id}
+              label={file.name}
+              control={
+                <button
+                  onClick={() => onUnarchive(file.id)}
+                  className="rounded-md px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                >
+                  Unarchive
+                </button>
+              }
+            />
+          ))
+        )}
+      </Group>
+    </Section>
+  );
+}

@@ -1,23 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import gsap from "gsap";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeSlug from "rehype-slug";
-import rehypeHighlight from "rehype-highlight";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
+import { useMarkdownPlugins } from "@/lib/markdown-plugins";
 import {
   Check,
   Copy,
   Link2,
   ArrowLeft,
   ArrowRight,
-  ArrowUp,
   Clock,
   Pencil,
   Eye,
-  Bookmark,
   Info,
   AlertTriangle,
   Lightbulb,
@@ -26,15 +28,70 @@ import {
   Tag,
   Trash2,
   X,
+  ScrollText,
+  Files,
+  Sparkles,
+  BookOpen,
+  Star,
+  Share,
+  MoreHorizontal,
+  Search,
+  Crosshair,
+  Download,
 } from "lucide-react";
 import type { MdFile } from "@/lib/markdown-utils";
+import type { ReadingMode } from "@/lib/persistence";
 import { slugify } from "@/lib/markdown-utils";
-import { Mermaid } from "./Mermaid";
+import { MermaidBlock } from "./MermaidLazy";
+import { MindMapBlock } from "./MindMapBlock";
+import { ReadingProgress } from "./ReadingProgress";
+import { MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
 import { detectEmbed, EmbedFrame, isVideoUrl, VideoPlayer } from "@/lib/media-embeds";
 import { Lightbox } from "./Lightbox";
 import { HL_COLORS, hlGroup, type Highlight } from "@/lib/dom-highlighter";
-import { getSelectionOffsets, buildRange, offsetFromPoint, firstTextRange } from "@/lib/text-offsets";
-import { splitIntoSubtopics } from "@/lib/markdown-utils";
+import {
+  getSelectionOffsets,
+  buildRange,
+  offsetFromPoint,
+  firstTextRange,
+  releaseTextIndex,
+  contextAround,
+  findAnchor,
+  nodeOffsets,
+  sameQuote,
+  textBetween,
+} from "@/lib/text-offsets";
+import {
+  findSaved,
+  savedExcerpt,
+  type SavedBlockType,
+  type SavedDraft,
+  type SavedItem,
+} from "@/lib/saved-items";
+import { locateInSource } from "@/lib/source-locate";
+import { fileSubtopics, headingChunkMap, readingMinutes, wordCount } from "@/lib/markdown-utils";
+import { InlineArtifact } from "./InlineArtifact";
+import { InteractiveBlock } from "./InteractiveBlock";
+import {
+  artifactReference,
+  isArtifactUrl,
+  prepareWorkspaceEmbeds,
+} from "@/lib/workspace-artifacts";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ViewerHeader, ViewerPager } from "./ViewerHeader";
+import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
 
 interface Props {
   file: MdFile;
@@ -44,23 +101,94 @@ interface Props {
   activeSubtopicId: string | null;
   highlightQuery: string | null;
   onContentChange: (fileId: string, content: string) => void;
-  chapterNumber: number;
-  totalChapters: number;
-  isComplete: boolean;
-  allComplete: boolean;
+  /**
+   * Id of a file that should open straight in the editor — a document the
+   * reader just created from the sidebar, so pasting markdown is the first
+   * thing they can do. Cleared through `onStartInEditConsumed` once honoured.
+   */
+  startInEditFileId?: string | null;
+  onStartInEditConsumed?: () => void;
   nextReadingMin: number | null;
-  onReadProgress: (fraction: number) => void;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   highlights: Highlight[];
   onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">) => void;
   onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
   onRemoveHighlight: (id: string) => void;
+  /**
+   * Corrected anchors, found while painting: the document was edited and these
+   * highlights had to be re-located. Persisted, but not as an undoable step.
+   */
+  onRepairHighlights?: (patches: Array<{ id: string; patch: Partial<Highlight> }>) => void;
+  /** Saved items (stars) for this file. */
+  saved?: SavedItem[];
+  /** Star or unstar a section or a block (table, code fence, quote, image). */
+  onToggleSaved?: (draft: SavedDraft) => void;
+  onRemoveSaved?: (id: string) => void;
+  /**
+   * A saved item the reader just opened from the Saved list: scroll to it and
+   * flash it once, then call `onSavedShown` so it isn't replayed on re-render.
+   */
+  pendingSaved?: SavedItem | null;
+  onSavedShown?: () => void;
+  onHome?: () => void;
+  workspaceId?: string | null;
+  workspaceRevision?: string;
+  workspaceFiles?: MdFile[];
+  workspaceName?: string;
+  onOpenArtifact?: (fileId: string, workspaceId: string) => void;
+  /** Opens the workspace command palette from the header's search field. */
+  onOpenPalette?: () => void;
+  onRemoveFile?: () => void;
+  /** Copy a share link to this one file. Hidden when omitted. */
+  onShareFile?: () => void;
+  readingMode?: ReadingMode;
+  onToggleReadingMode?: () => void;
+  /** Open the Ask AI panel prefilled from the current selection. */
+  onAskAi?: (prefill: { selection: string; actionId?: string }) => void;
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
 
-export function MarkdownViewer({
+/**
+ * Viewer-specific remark passes, held at module scope so the array identity is
+ * stable. Rebuilding it per render would make react-markdown re-parse the whole
+ * document every time this component re-renders for any other reason.
+ */
+const EXTRA_REMARK_PLUGINS = [remarkInteractiveBlockMeta];
+
+/**
+ * Star affordances live deep inside the rendered markdown (a heading, a table,
+ * a code block), far from the state that knows what is starred. They read it
+ * through this context rather than through props so that saving something
+ * re-renders the stars alone — passing `saved` into the `components` memo would
+ * rebuild every renderer and re-render the whole document on each star.
+ */
+interface SavedContextValue {
+  /** The element offsets are measured against (the rendered page). */
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Page the reader is on; undefined in single-page mode (whole-doc offsets). */
+  subtopicId?: string;
+  isSaved: (probe: {
+    kind: SavedItem["kind"];
+    headingId?: string;
+    text?: string;
+  }) => SavedItem | undefined;
+  toggle: (draft: SavedDraft) => void;
+  remove: (id: string) => void;
+  enabled: boolean;
+  /**
+   * Changes when the rendered markdown does. `SavableBlock` reads its own
+   * `textContent` to know what it would save, and that read walks the block's
+   * whole subtree — it must happen when the document changes, not on every
+   * render of every block.
+   */
+  revision: string;
+}
+
+const SavedContext = createContext<SavedContextValue | null>(null);
+
+function MarkdownViewerImpl({
   file,
   prevFile,
   nextFile,
@@ -68,39 +196,214 @@ export function MarkdownViewer({
   activeSubtopicId,
   highlightQuery,
   onContentChange,
-  chapterNumber,
-  totalChapters,
-  isComplete,
-  allComplete,
+  startInEditFileId,
+  onStartInEditConsumed,
   nextReadingMin,
-  onReadProgress,
   isBookmarked,
   onToggleBookmark,
   highlights,
   onAddHighlight,
   onUpdateHighlight,
   onRemoveHighlight,
+  onRepairHighlights,
+  saved = [],
+  onToggleSaved,
+  onRemoveSaved,
+  pendingSaved,
+  onSavedShown,
+  onHome,
+  workspaceId,
+  workspaceRevision,
+  workspaceFiles,
+  workspaceName,
+  onOpenArtifact,
+  onOpenPalette,
+  onRemoveFile,
+  onShareFile,
+  readingMode = "paginated",
+  onToggleReadingMode,
+  onAskAi,
 }: Props) {
+  const singleMode = readingMode === "single";
   const containerRef = useRef<HTMLDivElement>(null);
-  const [progress, setProgress] = useState(0);
-  const [showTop, setShowTop] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [draft, setDraft] = useState(file.content);
-  
-  const allChunks = useMemo(() => file.subtopics || splitIntoSubtopics(file.content, file.name), [file.subtopics, file.content, file.name]);
-  
-  const activeChunk = useMemo(() => {
-    return allChunks.find(s => s.id === activeSubtopicId) || allChunks[0] || { id: 'preamble', title: stripExt(file.name), content: file.content };
-  }, [allChunks, activeSubtopicId, file.content, file.name]);
+  // The draft text itself lives inside <MarkdownEditor>. Only the source the
+  // editor opened with is kept here, so Cancel can put it back.
+  const originalContentRef = useRef(file.content);
 
-  const chunkIndex = allChunks.findIndex(s => s.id === activeChunk.id);
+  const saveDraft = useCallback(
+    (content: string) => onContentChange(file.id, content),
+    [onContentChange, file.id],
+  );
+  const leaveEditMode = useCallback(
+    (cursorIndex?: number) => {
+      setEditMode(false);
+      if (cursorIndex !== undefined) {
+        const chunks = fileSubtopics(file);
+        if (chunks.length > 0) {
+          let currentLength = 0;
+          let targetChunk = chunks[0];
+          for (const chunk of chunks) {
+            if (
+              cursorIndex >= currentLength &&
+              cursorIndex <= currentLength + chunk.content.length
+            ) {
+              targetChunk = chunk;
+              break;
+            }
+            currentLength += chunk.content.length + 1;
+          }
+          if (singleMode) {
+            setTimeout(() => {
+              const el = document.getElementById(targetChunk.id);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 100);
+          } else {
+            onNav(file.id, targetChunk.id);
+          }
+        }
+      }
+    },
+    [file, singleMode, onNav],
+  );
+  const cancelEdit = useCallback(
+    (cursorIndex?: number) => {
+      onContentChange(file.id, originalContentRef.current);
+      setEditMode(false);
+      if (cursorIndex !== undefined) {
+        const chunks = fileSubtopics(file);
+        if (chunks.length > 0) {
+          let currentLength = 0;
+          let targetChunk = chunks[0];
+          for (const chunk of chunks) {
+            if (
+              cursorIndex >= currentLength &&
+              cursorIndex <= currentLength + chunk.content.length
+            ) {
+              targetChunk = chunk;
+              break;
+            }
+            currentLength += chunk.content.length + 1;
+          }
+          if (singleMode) {
+            setTimeout(() => {
+              const el = document.getElementById(targetChunk.id);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 100);
+          } else {
+            onNav(file.id, targetChunk.id);
+          }
+        }
+      }
+    },
+    [onContentChange, file.id, file, singleMode, onNav],
+  );
+  const enterEditMode = useCallback(() => {
+    originalContentRef.current = file.content;
+    setEditMode(true);
+  }, [file.content]);
+
+  const exportPDF = useCallback(() => {
+    window.print();
+  }, []);
+
+  const exportHTML = useCallback(() => {
+    if (!containerRef.current) return;
+    const html = containerRef.current.innerHTML;
+    const blob = new Blob(
+      [
+        `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>${file.name}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.6; }
+      mark { background-color: rgba(250, 204, 21, 0.4); color: inherit; }
+      img { max-width: 100%; height: auto; }
+      pre { background: #f4f4f5; padding: 1rem; overflow-x: auto; border-radius: 0.5rem; }
+      code { font-family: monospace; }
+      .docs-prose { max-width: 100%; }
+    </style>
+  </head>
+  <body>
+    ${html}
+  </body>
+</html>`,
+      ],
+      { type: "text/html" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name.replace(/\.md$/, "") + ".html";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [file.name]);
+
+  // Back leaves the editor. Autosave has already written the draft, so this
+  // drops nothing the reader typed.
+  useNavEscape(editMode, () => setEditMode(false), ESCAPE_DEPTH.mode);
+
+  const allChunks = useMemo(() => fileSubtopics(file), [file.subtopics, file.content, file.name]);
+
+  // A selected heading may be a nested ##/### that lives inside a # page rather
+  // than being a page itself; resolve it to its parent # chunk id.
+  const chunkForHeading = useMemo(() => headingChunkMap(file.content), [file.content]);
+
+  const activeChunk = useMemo(() => {
+    const targetId = (activeSubtopicId && chunkForHeading[activeSubtopicId]) || activeSubtopicId;
+    return (
+      allChunks.find((s) => s.id === targetId) ||
+      allChunks[0] || { id: "preamble", title: stripExt(file.name), content: file.content }
+    );
+  }, [allChunks, activeSubtopicId, chunkForHeading, file.content, file.name]);
+
+  // Section ids are slugged from headings, so editing a heading renames them.
+  // Highlights pointing at an id that no longer exists aren't lost — they're
+  // re-anchored by text and re-homed to whichever page now holds that text.
+  const knownChunkIds = useMemo(() => new Set(allChunks.map((c) => c.id)), [allChunks]);
+
+  const chunkIndex = allChunks.findIndex((s) => s.id === activeChunk.id);
   const isLastChunk = chunkIndex === allChunks.length - 1;
   const prevChunk = chunkIndex > 0 ? allChunks[chunkIndex - 1] : null;
-  const nextChunk = chunkIndex >= 0 && chunkIndex < allChunks.length - 1 ? allChunks[chunkIndex + 1] : null;
+  const nextChunk =
+    chunkIndex >= 0 && chunkIndex < allChunks.length - 1 ? allChunks[chunkIndex + 1] : null;
 
   const renderContent = useMemo(() => {
-    return activeChunk.content.replace(/^(#{1,2})\s+(.+?)\s*#*\s*\n?/, "");
+    let content = activeChunk.content.replace(/^\s*(#{1,6})\s+[^\n]+(\n|$)/, "");
+
+    // Strip leading horizontal rules (often left over when users separate sections with ---)
+    while (true) {
+      const next = content.replace(/^\s*(?:[-*_][ \t]*){3,}(?:\r?\n|$)/, "");
+      if (next === content) break;
+      content = next;
+    }
+
+    // Strip trailing horizontal rules
+    while (true) {
+      const next = content.replace(/(?:\r?\n|^)\s*(?:[-*_][ \t]*){3,}\s*$/, "");
+      if (next === content) break;
+      content = next;
+    }
+
+    return prepareWorkspaceEmbeds(content);
   }, [activeChunk.content]);
+
+  // Single-page mode renders the whole document at once. Content is left intact
+  // so every heading keeps its anchor id for in-page section navigation.
+  const fullRender = useMemo(() => {
+    return prepareWorkspaceEmbeds(file.content);
+  }, [file.content]);
+
+  // The markdown actually handed to the renderer. Resolved once here so the
+  // plugin hook and the renderer never disagree about which text is on screen.
+  const markdownSource = singleMode ? fullRender : renderContent;
+
+  // Syntax highlighting and math typesetting are fetched only for documents
+  // that contain code or math — see `useMarkdownPlugins`. Both plugin arrays
+  // are memoized, because a fresh array identity makes react-markdown re-parse.
+  const { remarkPlugins, rehypePlugins } = useMarkdownPlugins(markdownSource, EXTRA_REMARK_PLUGINS);
 
   const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
 
@@ -109,30 +412,186 @@ export function MarkdownViewer({
   // Selection so typing a label doesn't dismiss it.
   const contentRef = useRef<HTMLDivElement>(null);
   type HlMenu =
-    | { mode: "create"; text: string; start: number; end: number; x: number; y: number; label: string }
+    | {
+        mode: "create";
+        text: string;
+        start: number;
+        end: number;
+        prefix: string;
+        suffix: string;
+        x: number;
+        y: number;
+        label: string;
+      }
     | { mode: "edit"; hl: Highlight; x: number; y: number; label: string };
   const [menu, setMenu] = useState<HlMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const openCreateMenu = () => {
+  const openCreateMenu = (at?: { x: number; y: number }) => {
+    // Offsets are relative to whatever is rendered in contentRef: the active
+    // section in paged mode, the whole document in single mode. Both work.
     if (editMode || !contentRef.current) return;
     const sel = getSelectionOffsets(contentRef.current);
     if (!sel) return;
     const range = window.getSelection()?.getRangeAt(0);
     const r = range?.getBoundingClientRect();
+    // Captured now, while the offsets are still true: the surrounding text is
+    // what lets the highlight find itself again after the document is edited.
+    const ctx = contextAround(contentRef.current, sel.start, sel.end);
     setMenu({
       mode: "create",
       text: sel.text,
       start: sel.start,
       end: sel.end,
-      x: r ? r.left + r.width / 2 : window.innerWidth / 2,
-      y: r ? r.top : 120,
+      prefix: ctx.prefix,
+      suffix: ctx.suffix,
+      x: at ? at.x : r ? r.left + r.width / 2 : window.innerWidth / 2,
+      y: at ? at.y : r ? r.top : 120,
       label: "",
     });
   };
 
   const openEditMenu = (hl: Highlight, x: number, y: number) => {
     setMenu({ mode: "edit", hl, x, y, label: hl.label ?? "" });
+  };
+
+  // ---- saved items (stars) ----
+  //
+  // Offsets are measured against whatever `contentRef` renders: the active
+  // section in paged mode, the whole document in single mode. A section-scoped
+  // item records which page it came from so the two spaces never mix — the same
+  // rule persistent highlights follow.
+  const savedSubtopicId = singleMode ? undefined : activeChunk.id;
+  const savedCtx = useMemo<SavedContextValue>(
+    () => ({
+      containerRef: contentRef,
+      subtopicId: savedSubtopicId,
+      enabled: !!onToggleSaved && !editMode,
+      isSaved: (probe) => findSaved(saved, { fileId: file.id, ...probe }),
+      toggle: (draft) => onToggleSaved?.(draft),
+      remove: (id) => onRemoveSaved?.(id),
+      revision: markdownSource,
+    }),
+    [saved, savedSubtopicId, onToggleSaved, onRemoveSaved, editMode, file.id, markdownSource],
+  );
+
+  // Opening a saved item from the Saved list: once the target page is rendered,
+  // scroll to the passage and flash it. Anchored by quote first (the document
+  // may have been edited since it was saved), by stored offsets only as a hint.
+  useEffect(() => {
+    if (!pendingSaved || editMode) return;
+    const container = contentRef.current;
+    if (!container) return;
+
+    const frame = requestAnimationFrame(() => {
+      const heading = pendingSaved.headingId
+        ? (document.getElementById(pendingSaved.headingId) as HTMLElement | null)
+        : null;
+      const image = pendingSaved.blockSrc
+        ? container.querySelector<HTMLElement>(`img[src="${CSS.escape(pendingSaved.blockSrc)}"]`)
+        : null;
+
+      let range: Range | null = null;
+      if (!heading && !image && pendingSaved.text) {
+        const anchor = findAnchor(
+          container,
+          pendingSaved.text,
+          pendingSaved.prefix,
+          pendingSaved.suffix,
+          pendingSaved.start,
+        );
+        range = anchor ? buildRange(container, anchor.start, anchor.end) : null;
+        if (!range) range = firstTextRange(container, pendingSaved.text);
+      }
+
+      const target =
+        heading ??
+        image ??
+        (range
+          ? ((range.startContainer.nodeType === Node.ELEMENT_NODE
+              ? (range.startContainer as HTMLElement)
+              : range.startContainer.parentElement) ?? null)
+          : null);
+      target?.scrollIntoView({ behavior: "smooth", block: heading ? "start" : "center" });
+
+      // Flash: a text range gets a one-shot CSS highlight, a heading or image
+      // (which have no range) get the equivalent class-based pulse.
+      const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
+        | Map<string, any>
+        | undefined;
+      let clear: (() => void) | undefined;
+      if (range && CSSH && typeof (window as any).Highlight !== "undefined") {
+        CSSH.set("dc-saved-flash", new (window as any).Highlight(range));
+        clear = () => CSSH.delete("dc-saved-flash");
+      } else if (target) {
+        target.classList.add("docs-saved-flash");
+        clear = () => target.classList.remove("docs-saved-flash");
+      }
+      if (clear) setTimeout(clear, 1800);
+
+      onSavedShown?.();
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [pendingSaved, editMode, renderContent, fullRender, onSavedShown]);
+
+  // "Inspect" — the reader's answer to DevTools' inspect element. Take the
+  // rendered text under the pointer, find where it lives in the markdown
+  // source, and drop the editor's caret on it, selected and scrolled into view.
+  const editorRef = useRef<MarkdownEditorHandle>(null);
+  const [pendingSelect, setPendingSelect] = useState<{ start: number; end: number } | null>(null);
+  const [inspectMissed, setInspectMissed] = useState(false);
+
+  const inspect = (text: string) => {
+    // Paged mode renders one section, so prefer a match inside that section —
+    // a phrase repeated elsewhere shouldn't hijack the jump.
+    const chunkStart = singleMode ? -1 : file.content.indexOf(activeChunk.content);
+    const prefer =
+      chunkStart >= 0 && !singleMode
+        ? { from: chunkStart, to: chunkStart + activeChunk.content.length }
+        : undefined;
+    const span = locateInSource(file.content, text, prefer);
+
+    setMenu(null);
+    window.getSelection()?.removeAllRanges();
+    setInspectMissed(!span);
+    setEditMode(true);
+    setPendingSelect(span ?? { start: Math.max(0, chunkStart), end: Math.max(0, chunkStart) });
+  };
+
+  // Applied once the editor has mounted with the document's source.
+  useEffect(() => {
+    if (!pendingSelect || !editMode) return;
+    const { start, end } = pendingSelect;
+    setPendingSelect(null);
+    editorRef.current?.select(start, end);
+  }, [pendingSelect, editMode]);
+
+  // The "couldn't find it" notice is per-jump, not sticky.
+  useEffect(() => {
+    if (!inspectMissed) return;
+    const t = setTimeout(() => setInspectMissed(false), 6000);
+    return () => clearTimeout(t);
+  }, [inspectMissed]);
+
+  // Right-click behaves like DevTools: it acts on what's under the pointer.
+  // With nothing selected, select the block being pointed at first, so the
+  // popover (and Inspect) has something concrete to work with.
+  const onContextMenu = (e: React.MouseEvent) => {
+    if (editMode || !contentRef.current) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) {
+      const el = (e.target as HTMLElement)?.closest(
+        "p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, pre, figcaption",
+      );
+      if (!el || !contentRef.current.contains(el)) return;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+    e.preventDefault();
+    openCreateMenu({ x: e.clientX, y: e.clientY });
   };
 
   // Paint persistent highlights with the CSS Custom Highlight API — no DOM
@@ -144,38 +603,132 @@ export function MarkdownViewer({
       | Map<string, any>
       | undefined;
     if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
+    // Mid-edit the rendered document is a moving target (the draft autosaves
+    // every 400ms). Re-anchoring waits for the reader to leave the editor.
+    if (editMode) return;
 
-    const groups: Record<string, Range[]> = {};
-    for (const hl of highlights) {
-      if (hl.subtopicId && hl.subtopicId !== activeChunk.id) continue;
-      const range =
-        typeof hl.start === "number" && typeof hl.end === "number"
-          ? buildRange(container, hl.start, hl.end)
-          : firstTextRange(container, hl.text);
-      if (!range || range.collapsed) continue;
-      const g = hlGroup(hl.color);
-      (groups[g] ||= []).push(range);
-    }
+    // Deferred to the next frame so adding a highlight doesn't repaint every
+    // other one synchronously inside the same commit the reader is watching.
+    const frame = requestAnimationFrame(() => {
+      const groups: Record<string, Range[]> = {};
+      // Corrections found along the way, written back once at the end.
+      const repairs: Array<{ id: string; patch: Partial<Highlight> }> = [];
 
-    HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
-    for (const [g, ranges] of Object.entries(groups)) {
-      CSSH.set(g, new (window as any).Highlight(...ranges));
-    }
+      for (const hl of highlights) {
+        // Which highlights this container can show, and whether its offsets are
+        // measured in the same space as the stored ones. Section highlights
+        // carry offsets relative to their section, meaningless in the whole-doc
+        // render; whole-doc highlights are the reverse.
+        const sectionExists = !hl.subtopicId || knownChunkIds.has(hl.subtopicId);
+        let owned: boolean;
+        if (singleMode) {
+          owned = !hl.subtopicId;
+        } else {
+          // A stale subtopicId means the heading it was slugged from was edited.
+          // Rather than dropping the highlight, let the current page try to
+          // re-anchor it by text and adopt it if the text is here.
+          if (sectionExists && hl.subtopicId !== activeChunk.id) continue;
+          owned = hl.subtopicId === activeChunk.id;
+        }
+
+        // Fast path: the stored offsets still cover the stored text.
+        let range: Range | null = null;
+        if (owned && typeof hl.start === "number" && typeof hl.end === "number") {
+          const at = buildRange(container, hl.start, hl.end);
+          if (at && !at.collapsed && sameQuote(textBetween(container, hl.start, hl.end), hl.text)) {
+            range = at;
+          }
+        }
+
+        // The document moved under the highlight (an edit above it, a rewritten
+        // passage, a renamed section). Find the passage again by its text.
+        if (!range) {
+          const anchor = findAnchor(container, hl.text, hl.prefix, hl.suffix, hl.start);
+          if (anchor) {
+            range = buildRange(container, anchor.start, anchor.end);
+            // Only persist offsets measured in this highlight's own space —
+            // writing whole-doc offsets onto a section highlight (or the
+            // reverse) would corrupt it for the other reading mode.
+            if (range && !range.collapsed && (owned || !sectionExists)) {
+              repairs.push({
+                id: hl.id,
+                patch: {
+                  start: anchor.start,
+                  end: anchor.end,
+                  ...contextAround(container, anchor.start, anchor.end),
+                  ...(sectionExists
+                    ? null
+                    : { subtopicId: singleMode ? undefined : activeChunk.id }),
+                  ...(hl.orphaned ? { orphaned: false } : null),
+                },
+              });
+            }
+          }
+          // Legacy highlights stored before offsets existed: first match wins,
+          // as before.
+          if (!range) range = firstTextRange(container, hl.text);
+        }
+
+        if (!range || range.collapsed) {
+          // Not on this page. Only call it gone once the markdown source itself
+          // no longer contains the text — in paginated mode the page on screen
+          // says nothing about the rest of the document. Flagged, never
+          // deleted: an edit must not destroy a reader's note.
+          if (!hl.orphaned && !locateInSource(file.content, hl.text)) {
+            repairs.push({ id: hl.id, patch: { orphaned: true } });
+          }
+          continue;
+        }
+        if (hl.orphaned && !repairs.some((r) => r.id === hl.id)) {
+          repairs.push({ id: hl.id, patch: { orphaned: false } });
+        }
+        const g = hlGroup(hl.color);
+        (groups[g] ||= []).push(range);
+      }
+
+      HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
+      for (const [g, ranges] of Object.entries(groups)) {
+        CSSH.set(g, new (window as any).Highlight(...ranges));
+      }
+
+      // Re-runs this effect, which then takes the fast path for every repaired
+      // highlight and produces no further repairs.
+      if (repairs.length) onRepairHighlights?.(repairs);
+    });
+
     return () => {
+      cancelAnimationFrame(frame);
       HL_COLORS.forEach((c) => CSSH.delete(hlGroup(c)));
     };
-  }, [highlights, activeChunk.id, renderContent, editMode]);
+  }, [
+    highlights,
+    activeChunk.id,
+    renderContent,
+    fullRender,
+    editMode,
+    singleMode,
+    knownChunkIds,
+    file.content,
+    onRepairHighlights,
+  ]);
+
+  // The offset index outlives this component's containers; drop it on unmount
+  // so a stale document can't keep its text nodes (or its observer) alive.
+  useEffect(() => releaseTextIndex, []);
 
   // Click inside the content: if the click lands on an existing highlight, open
   // its edit popover (CSS highlights aren't DOM nodes, so we hit-test offsets).
   const onContentClick = (e: React.MouseEvent) => {
     if (editMode || !contentRef.current) return;
+    if (!highlights.length) return; // nothing to hit-test against
     if (!window.getSelection()?.isCollapsed) return; // a drag-select, not a click
     const off = offsetFromPoint(contentRef.current, e.clientX, e.clientY);
     if (off == null) return;
+    // In single mode only whole-doc highlights carry offsets valid for this
+    // container; section highlights are painted by text and aren't hit-testable.
     const hit = highlights.find(
       (h) =>
-        (!h.subtopicId || h.subtopicId === activeChunk.id) &&
+        (singleMode ? !h.subtopicId : !h.subtopicId || h.subtopicId === activeChunk.id) &&
         typeof h.start === "number" &&
         typeof h.end === "number" &&
         off >= h.start &&
@@ -203,69 +756,93 @@ export function MarkdownViewer({
   useEffect(() => setMenu(null), [activeChunk.id, file.id, editMode]);
 
   useEffect(() => {
-    setDraft(file.content);
-    setEditMode(false);
+    originalContentRef.current = file.content;
+    // A document the reader just created opens in the editor with the caret
+    // already in it; every other document opens as reading.
+    const startInEdit = startInEditFileId === file.id;
+    setEditMode(startInEdit);
+    if (startInEdit) {
+      setPendingSelect({ start: 0, end: 0 });
+      onStartInEditConsumed?.();
+    }
+    // Only on a document switch — `startInEditFileId` is consumed here, and
+    // re-running when it clears would drop the reader out of the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.id]);
 
+  // Edit requested for the document already on screen — the sidebar's "Edit"
+  // item, which now owns that action instead of a header button. The effect
+  // above only fires on a document switch, so this is the case it cannot see.
+  useEffect(() => {
+    if (startInEditFileId !== file.id || editMode) return;
+    setEditMode(true);
+    setPendingSelect({ start: 0, end: 0 });
+    onStartInEditConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startInEditFileId, file.id]);
+
   // Gentle fade/rise when switching documents — reads as a settle, not a flash.
+  //
+  // Driven by the Web Animations API rather than GSAP: this and one sidebar
+  // tween were the app's only two uses of a 153 kB library, and both are a
+  // single keyframe pair the platform runs on the compositor for free.
+  //
+  // `fill` is deliberately left at its default so no residual transform stays
+  // behind — any transform, even an identity one, turns this element into the
+  // containing block for `position: fixed` descendants, which would re-anchor
+  // the selection popover to the scroller instead of the viewport.
   useEffect(() => {
-    if (!containerRef.current) return;
-    const ctx = gsap.fromTo(
-      containerRef.current,
-      { opacity: 0, y: 10 },
-      { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" },
+    const el = containerRef.current;
+    if (!el?.animate) return;
+    const anim = el.animate(
+      [
+        { opacity: 0, transform: "translateY(10px)" },
+        { opacity: 1, transform: "translateY(0)" },
+      ],
+      { duration: 400, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
     );
-    return () => {
-      ctx.kill();
-    };
+    return () => anim.cancel();
   }, [activeChunk.id, file.id]);
 
-  // Autosave draft to parent
-  useEffect(() => {
-    if (!editMode) return;
-    const t = setTimeout(() => onContentChange(file.id, draft), 400);
-    return () => clearTimeout(t);
-  }, [draft, editMode, file.id, onContentChange]);
+  // Autosaving the draft is the editor's own concern now — see MarkdownEditor.
 
-  // Reset to top only when the chapter changes
-  useEffect(() => {
-    window.scrollTo({ top: 0 });
-  }, [activeChunk.id, file.id]);
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
-  // Scrollspy, ambient progress, and earned completion. Completion is reported
-  // by how far the reader has actually scrolled.
+  // Paginated: when a nested ##/### heading inside the page is selected, scroll
+  // to its anchor; otherwise (page's own # or a page change) reset to top.
+  // (Skipped in single mode, which scrolls within the whole-doc render below.)
   useEffect(() => {
-    const onScroll = () => {
-      const doc = document.documentElement;
-      const scrolled = window.scrollY;
-      const max = doc.scrollHeight - window.innerHeight;
-      const frac = max > 0 ? scrolled / max : 1;
-      setProgress(frac * 100);
-      setShowTop(scrolled > 400);
-      onReadProgress(frac);
-    };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, [file.id, activeChunk.id, onReadProgress, editMode]);
+    if (singleMode) return;
+    const el =
+      activeSubtopicId && activeSubtopicId !== activeChunk.id
+        ? document.getElementById(activeSubtopicId)
+        : null;
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    else scrollToTop();
+  }, [activeChunk.id, activeSubtopicId, file.id, singleMode]);
 
-  // Save shortcut
+  // Single-page: switching document scrolls to top; selecting a section from the
+  // sidebar scrolls to that heading's anchor within the full document.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && editMode) {
-        e.preventDefault();
-        onContentChange(file.id, draft);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [draft, editMode, file.id, onContentChange]);
+    if (!singleMode) return;
+    const el = activeSubtopicId ? document.getElementById(activeSubtopicId) : null;
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    else scrollToTop();
+  }, [singleMode, activeSubtopicId, file.id]);
+
+  // Reading progress now lives in <ReadingProgress>, which writes the
+  // percentage straight to its own DOM node. It used to be state up here, and
+  // because the number changes on nearly every frame of a scroll it re-rendered
+  // this whole component — markdown tree included — once per frame.
+
+  // The Cmd/Ctrl+S shortcut belongs to the editor, which is where the draft is.
 
   const stats = useMemo(() => {
-    const words = activeChunk.content.trim().split(/\s+/).filter(Boolean).length;
-    const readingMin = Math.max(1, Math.round(words / 220));
-    return { words, readingMin };
-  }, [activeChunk.content]);
+    const src = singleMode ? file.content : activeChunk.content;
+    return { words: wordCount(src), readingMin: readingMinutes(src) };
+  }, [singleMode, file.content, activeChunk.content]);
 
   // Search-query highlighting stays a lightweight React wrap. Persistent
   // highlights are painted via the CSS Custom Highlight API instead (see the
@@ -287,8 +864,14 @@ export function MarkdownViewer({
   };
 
   const walkChildren = (children: any): any => {
+    // With no active search there is nothing to wrap. Returning children
+    // untouched avoids blanketing the document in <span>s — which bloated the
+    // DOM and, worse, split it into thousands of extra text nodes that every
+    // offset lookup then had to walk.
+    if (!highlightQuery?.trim()) return children;
     if (typeof children === "string") return highlightText(children);
-    if (Array.isArray(children)) return children.map((c, i) => <span key={i}>{walkChildren(c)}</span>);
+    if (Array.isArray(children))
+      return children.map((c, i) => <span key={i}>{walkChildren(c)}</span>);
     return children;
   };
 
@@ -308,9 +891,23 @@ export function MarkdownViewer({
         const solo = kids.filter((c: any) => !(typeof c === "string" && !c.trim()));
         const only = solo.length === 1 ? solo[0] : null;
         const href = only?.props?.href;
+        const src = only?.props?.src;
+        if (isArtifactUrl(src)) {
+          return (
+            <InlineArtifact
+              reference={artifactReference(src)}
+              currentWorkspaceId={workspaceId}
+              workspaceRevision={workspaceRevision}
+              currentWorkspaceFiles={workspaceFiles}
+              currentWorkspaceName={workspaceName}
+              onOpenArtifact={onOpenArtifact}
+            />
+          );
+        }
         if (href) {
           const inner = only.props?.children;
-          const text = typeof inner === "string" ? inner : Array.isArray(inner) ? inner.join("") : "";
+          const text =
+            typeof inner === "string" ? inner : Array.isArray(inner) ? inner.join("") : "";
           if (text === href || text === "") {
             const embed = detectEmbed(href);
             if (embed) return <EmbedFrame embed={embed} />;
@@ -319,9 +916,37 @@ export function MarkdownViewer({
         }
         return <p {...p}>{walkChildren(p.children)}</p>;
       },
-      blockquote: (p: any) => <Callout {...p} />,
-      pre: (p: any) => <CodeBlock {...p} />,
+      blockquote: (p: any) => (
+        <SavableBlock blockType="quote">
+          <Callout {...p} />
+        </SavableBlock>
+      ),
+      pre: (p: any) => {
+        const codeEl = Array.isArray(p.children) ? p.children[0] : p.children;
+        const cls = codeEl?.props?.className ?? "";
+        const isMermaid = typeof cls === "string" && /language-mermaid/.test(cls);
+        return (
+          <SavableBlock
+            blockType="code"
+            className={isMermaid ? "docs-savable-mermaid" : "docs-savable-code"}
+          >
+            <CodeBlock {...p} />
+          </SavableBlock>
+        );
+      },
       img: (p: any) => {
+        if (isArtifactUrl(p.src)) {
+          return (
+            <InlineArtifact
+              reference={artifactReference(p.src)}
+              currentWorkspaceId={workspaceId}
+              workspaceRevision={workspaceRevision}
+              currentWorkspaceFiles={workspaceFiles}
+              currentWorkspaceName={workspaceName}
+              onOpenArtifact={onOpenArtifact}
+            />
+          );
+        }
         // ![alt](clip.mp4) renders a player; a `title` that is an image URL
         // (![alt](clip.mp4 "thumb.jpg")) becomes the preview poster.
         if (p.src && isVideoUrl(p.src)) {
@@ -332,12 +957,14 @@ export function MarkdownViewer({
           return <VideoPlayer src={p.src} poster={poster} />;
         }
         return (
-          <img
-            {...p}
-            loading="lazy"
-            onClick={() => setLightbox({ src: p.src, alt: p.alt })}
-            className="cursor-zoom-in"
-          />
+          <SavableBlock blockType="image" as="span" identity={p.src} className="inline-block">
+            <img
+              {...p}
+              loading="lazy"
+              onClick={() => setLightbox({ src: p.src, alt: p.alt })}
+              className="cursor-zoom-in"
+            />
+          </SavableBlock>
         );
       },
       a: (p: any) => (
@@ -347,362 +974,512 @@ export function MarkdownViewer({
       ),
       li: (p: any) => <li {...p}>{walkChildren(p.children)}</li>,
       table: (p: any) => (
-        <div className="docs-table-wrap">
-          <table {...p} />
-        </div>
+        <SavableBlock blockType="table" className="docs-savable-table">
+          <div className="docs-table-wrap">
+            <table {...p} />
+          </div>
+        </SavableBlock>
       ),
       td: (p: any) => <td {...p}>{walkChildren(p.children)}</td>,
       th: (p: any) => <th {...p}>{walkChildren(p.children)}</th>,
     }),
+    // `highlights` is deliberately absent: nothing here reads it, and including
+    // it rebuilt every renderer on each highlight change, re-rendering the whole
+    // markdown tree (the entire document, in single-page mode).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [highlights, highlightQuery],
+    [highlightQuery, workspaceId, workspaceRevision, workspaceFiles, workspaceName, onOpenArtifact],
   );
 
   return (
-    <>
-      {menu && !editMode && (
-        <div
-          ref={menuRef}
-          className="fixed z-[60] w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
-          style={{ top: Math.max(56, menu.y - 12), left: menu.x }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="mb-2 flex items-center justify-between px-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {menu.mode === "create" ? "Highlight" : "Edit highlight"}
-            </span>
-            <button
-              onClick={() => setMenu(null)}
-              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-              aria-label="Close"
+    <div className="flex h-full flex-col bg-background">
+      <ViewerHeader
+        navAction={
+          // The section picker heads the toolbar in both reading modes. Paged
+          // mode switches the page it renders; single-page mode scrolls to the
+          // heading in the whole-document render — the document has the same
+          // sections either way, so the same control moves between them.
+          allChunks.length <= 1 ? null : (
+            <Select
+              value={singleMode ? (activeSubtopicId ?? allChunks[0].id) : activeChunk.id}
+              onValueChange={(val) => onNav(file.id, val)}
             >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          <div className="mb-2 flex items-center gap-1.5 px-1">
-            {HL_COLORS.map((color) => {
-              const active = menu.mode === "edit" && menu.hl.color === color;
-              return (
+              {/* Borderless and fixed-width: it sits at the head of the toolbar
+                  where a bordered control read as an input, and a width that
+                  tracked the section title made the whole header shift on every
+                  section change. */}
+              <SelectTrigger className="h-9 w-56 shrink-0 flex items-center gap-2 rounded-lg border-0 bg-transparent px-2 py-1.5 text-sm font-medium text-foreground shadow-none hover:bg-accent/50 focus:ring-0">
+                <span className="truncate min-w-0 text-left">
+                  {singleMode
+                    ? (allChunks.find((c) => c.id === activeSubtopicId)?.title ??
+                      allChunks[0].title)
+                    : activeChunk.title}
+                </span>
+              </SelectTrigger>
+              <SelectContent className="max-w-[90vw] sm:max-w-md w-full">
+                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 bg-popover z-10 border-b border-border/50 mb-1">
+                  Sections
+                </div>
+                <div className="max-h-[40vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
+                  {allChunks.map((chunk) => {
+                    // Cached word count — this list is rebuilt on every render
+                    // of the viewer, and scanning every section's text each
+                    // time was O(document) for a dropdown that is usually shut.
+                    const readingMin = readingMinutes(chunk.content);
+                    return (
+                      <SelectItem
+                        key={chunk.id}
+                        value={chunk.id}
+                        className="cursor-pointer pl-2 pr-2 [&>span.absolute]:hidden"
+                      >
+                        <div className="flex w-full items-center justify-between gap-4">
+                          <span className="truncate">
+                            {chunk.title.length > 20
+                              ? chunk.title.substring(0, 20) + "..."
+                              : chunk.title}
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {readingMin} min
+                          </span>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                </div>
+              </SelectContent>
+            </Select>
+          )
+        }
+        actions={
+          <>
+            {/* Starring lives on the document's own row in the sidebar, and
+                editing lives in that row's menu. What is left here is the one
+                control that changes how this view reads. */}
+            <div className="flex items-center gap-1">
+              {!editMode && onToggleReadingMode && (
                 <button
-                  key={color}
-                  aria-label={`Highlight ${color}`}
-                  className={`h-6 w-6 rounded-full transition-transform hover:scale-110 ${
-                    active ? "ring-2 ring-foreground ring-offset-1 ring-offset-popover" : "border border-border/60"
-                  }`}
-                  style={{ backgroundColor: color }}
-                  onClick={() => {
-                    if (menu.mode === "create") {
-                      onAddHighlight({
-                        text: menu.text,
-                        color,
-                        label: menu.label.trim() || undefined,
-                        subtopicId: activeChunk.id,
-                        start: menu.start,
-                        end: menu.end,
-                      });
-                      window.getSelection()?.removeAllRanges();
-                    } else {
-                      onUpdateHighlight(menu.hl.id, { color });
+                  onClick={onToggleReadingMode}
+                  title={
+                    singleMode
+                      ? "Paged: read one section at a time"
+                      : "Single page: read the whole document"
+                  }
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Files className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </>
+        }
+      />
+      <div
+        ref={containerRef}
+        className="relative flex-1 overflow-y-auto transition-colors duration-500"
+      >
+        {menu &&
+          !editMode &&
+          // Portalled to <body> on purpose. The popover is positioned in viewport
+          // coordinates, and any transformed ancestor (the GSAP entrance tween,
+          // a backdrop-filter, a `will-change`) would silently become its
+          // containing block and throw those coordinates off by the scroller's
+          // height — which is what hid it entirely in single-page mode.
+          createPortal(
+            <div
+              ref={menuRef}
+              className="fixed z-(--z-dropdown) w-64 -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-xl"
+              style={{
+                top: Math.min(Math.max(56, menu.y - 12), window.innerHeight - 24),
+                left: Math.min(Math.max(132, menu.x), window.innerWidth - 132),
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="mb-2 flex items-center justify-between px-1">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  {menu.mode === "create" ? "Highlight" : "Edit highlight"}
+                </span>
+                <button
+                  onClick={() => setMenu(null)}
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  aria-label="Close"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              {menu.mode === "create" && onAskAi && (
+                <div className="mb-2 border-b border-border pb-2">
+                  <div className="mb-1.5 flex items-center gap-1 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    <Sparkles className="h-3 w-3" /> Ask AI
+                  </div>
+                  <div className="flex flex-wrap gap-1 px-1">
+                    {[
+                      { label: "Ask AI", action: undefined },
+                      { label: "Summarize", action: "summary" },
+                      { label: "Explain", action: "explain" },
+                      { label: "Notes", action: "notes" },
+                      { label: "Mermaid", action: "mermaid" },
+                      { label: "Rewrite", action: "rewrite" },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={() => {
+                          onAskAi({ selection: menu.text, actionId: item.action });
+                          window.getSelection()?.removeAllRanges();
+                          setMenu(null);
+                        }}
+                        className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mb-2 flex items-center gap-1.5 px-1">
+                {HL_COLORS.map((color) => {
+                  const active = menu.mode === "edit" && menu.hl.color === color;
+                  return (
+                    <button
+                      key={color}
+                      aria-label={`Highlight ${color}`}
+                      className={`h-6 w-6 rounded-full transition-transform hover:scale-110 ${
+                        active
+                          ? "ring-2 ring-foreground ring-offset-1 ring-offset-popover"
+                          : "border border-border/60"
+                      }`}
+                      style={{ backgroundColor: color }}
+                      onClick={() => {
+                        if (menu.mode === "create") {
+                          onAddHighlight({
+                            text: menu.text,
+                            color,
+                            label: menu.label.trim() || undefined,
+                            subtopicId: singleMode ? undefined : activeChunk.id,
+                            start: menu.start,
+                            end: menu.end,
+                            prefix: menu.prefix,
+                            suffix: menu.suffix,
+                          });
+                          window.getSelection()?.removeAllRanges();
+                        } else {
+                          onUpdateHighlight(menu.hl.id, { color });
+                        }
+                        setMenu(null);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+
+              <div className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2">
+                <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  value={menu.label}
+                  onChange={(e) => setMenu((m) => (m ? { ...m, label: e.target.value } : m))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      if (menu.mode === "create") {
+                        onAddHighlight({
+                          text: menu.text,
+                          color: HL_COLORS[0],
+                          label: menu.label.trim() || undefined,
+                          subtopicId: singleMode ? undefined : activeChunk.id,
+                          start: menu.start,
+                          end: menu.end,
+                          prefix: menu.prefix,
+                          suffix: menu.suffix,
+                        });
+                        window.getSelection()?.removeAllRanges();
+                      } else {
+                        onUpdateHighlight(menu.hl.id, { label: menu.label.trim() || undefined });
+                      }
+                      setMenu(null);
                     }
+                  }}
+                  placeholder="Add a label (optional)"
+                  className="w-full bg-transparent py-1.5 text-xs outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+
+              <button
+                onClick={() => inspect(menu.mode === "create" ? menu.text : menu.hl.text)}
+                title="Open the editor with this text selected"
+                className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              >
+                <Crosshair className="h-3.5 w-3.5" /> Inspect in source
+              </button>
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(
+                      menu.mode === "create" ? menu.text : menu.hl.text,
+                    );
                     setMenu(null);
                   }}
-                />
-              );
-            })}
-          </div>
-
-          <div className="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-background px-2">
-            <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <input
-              value={menu.label}
-              onChange={(e) => setMenu((m) => (m ? { ...m, label: e.target.value } : m))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  if (menu.mode === "create") {
-                    onAddHighlight({
-                      text: menu.text,
-                      color: HL_COLORS[0],
-                      label: menu.label.trim() || undefined,
-                      subtopicId: activeChunk.id,
-                      start: menu.start,
-                      end: menu.end,
-                    });
-                    window.getSelection()?.removeAllRanges();
-                  } else {
-                    onUpdateHighlight(menu.hl.id, { label: menu.label.trim() || undefined });
-                  }
-                  setMenu(null);
-                }
-              }}
-              placeholder="Add a label (optional)"
-              className="w-full bg-transparent py-1.5 text-xs outline-none placeholder:text-muted-foreground"
-            />
-          </div>
-
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(menu.mode === "create" ? menu.text : menu.hl.text);
-                setMenu(null);
-              }}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <Copy className="h-3.5 w-3.5" /> Copy
-            </button>
-            {menu.mode === "edit" && (
-              <button
-                onClick={() => {
-                  onRemoveHighlight(menu.hl.id);
-                  setMenu(null);
-                }}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Remove
-              </button>
-            )}
-            {menu.mode === "create" && (
-              <button
-                onClick={() => {
-                  onAddHighlight({
-                    text: menu.text,
-                    color: HL_COLORS[0],
-                    label: menu.label.trim() || undefined,
-                    subtopicId: activeChunk.id,
-                    start: menu.start,
-                    end: menu.end,
-                  });
-                  window.getSelection()?.removeAllRanges();
-                  setMenu(null);
-                }}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90"
-              >
-                Highlight
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div
-        className="fixed left-0 right-0 top-16 z-40 h-0.5 bg-primary/80 transition-transform origin-left"
-        style={{ transform: `scaleX(${progress / 100})` }}
-      />
-
-      {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
-
-      <div
-        className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}
-      >
-        <article
-          ref={containerRef}
-          onMouseUp={openCreateMenu}
-          className="docs-prose mx-auto min-w-0 flex-1"
-        >
-          <div className="mb-8">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">
-                {stripExt(file.name)}
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-muted/50 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                <Clock className="h-3 w-3" /> ≈ {stats.readingMin} min read
-              </span>
-              {progress > 90 && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                  <Check className="h-3 w-3" strokeWidth={3} /> Read
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-start justify-between gap-4">
-              <h1 className="min-w-0 flex-1 text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl break-words">
-                {activeChunk.title}
-              </h1>
-              
-              <div className="mt-1.5 flex shrink-0 items-center gap-2">
-                <button
-                  onClick={onToggleBookmark}
-                  aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
-                  title={isBookmarked ? "Remove bookmark" : "Bookmark this chapter"}
-                  className={`inline-flex items-center justify-center rounded-md border border-border bg-background p-2 transition-colors hover:border-primary/40 active:scale-95 ${
-                    isBookmarked ? "text-primary" : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                 >
-                  <Bookmark
-                    className={`h-3.5 w-3.5 ${isBookmarked ? "fill-primary" : ""}`}
-                  />
+                  <Copy className="h-3.5 w-3.5" /> Copy
                 </button>
-                <button
-                  onClick={() => setEditMode((e) => !e)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95"
-                >
-                  {editMode ? (
-                    <>
-                      <Eye className="h-3.5 w-3.5" /> Preview
-                    </>
-                  ) : (
-                    <>
-                      <Pencil className="h-3.5 w-3.5" /> Edit
-                    </>
-                  )}
-                </button>
+                {menu.mode === "edit" && (
+                  <button
+                    onClick={() => {
+                      onRemoveHighlight(menu.hl.id);
+                      setMenu(null);
+                    }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Remove
+                  </button>
+                )}
+                {menu.mode === "create" && (
+                  <button
+                    onClick={() => {
+                      onAddHighlight({
+                        text: menu.text,
+                        color: HL_COLORS[0],
+                        label: menu.label.trim() || undefined,
+                        subtopicId: singleMode ? undefined : activeChunk.id,
+                        start: menu.start,
+                        end: menu.end,
+                        prefix: menu.prefix,
+                        suffix: menu.suffix,
+                      });
+                      window.getSelection()?.removeAllRanges();
+                      setMenu(null);
+                    }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90"
+                  >
+                    Highlight
+                  </button>
+                )}
               </div>
-            </div>
-          </div>
-
-          {editMode ? (
-            <div className="grid gap-4 lg:grid-cols-2">
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                spellCheck={false}
-                className="min-h-[70vh] w-full resize-y rounded-lg border border-border bg-muted/30 p-4 font-mono text-[13px] leading-relaxed outline-none focus:border-primary/50"
-              />
-              <div className="rounded-lg border border-border bg-background p-6">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[
-                    rehypeSlug,
-                    rehypeKatex,
-                    [rehypeHighlight, { detect: true, ignoreMissing: true }],
-                  ]}
-                  components={components}
-                >
-                  {draft}
-                </ReactMarkdown>
-              </div>
-            </div>
-          ) : (
-            <div ref={contentRef} onClick={onContentClick}>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[
-                  rehypeSlug,
-                  rehypeKatex,
-                  [rehypeHighlight, { detect: true, ignoreMissing: true }],
-                ]}
-                components={components}
-              >
-                {renderContent}
-              </ReactMarkdown>
-            </div>
+            </div>,
+            document.body,
           )}
 
-          {/* Natural stopping point — quiet acknowledgement, clear next step */}
-          {!editMode && (
-            <div className="mt-16 border-t border-border pt-8">
-              {isLastChunk && (
-                <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                    <Check className="h-3 w-3" strokeWidth={3} />
-                  </span>
-                  <span>
-                    <span className="font-medium text-foreground">{stripExt(file.name)}</span>{" "}
-                    Documentation complete
-                  </span>
-                </div>
-              )}
+        {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
-              {nextChunk ? (
-                <button
-                  onClick={() => onNav(file.id, nextChunk.id)}
-                  className="group flex w-full items-center justify-between gap-4 rounded-xl border border-border p-5 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
-                >
-                  <span className="min-w-0">
-                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Next topic
+        <div className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}>
+          <article
+            onMouseUp={() => openCreateMenu()}
+            onContextMenu={onContextMenu}
+            className="docs-prose mx-auto min-w-0 flex-1"
+          >
+            {!singleMode && (
+              <div className="mb-8">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl wrap-break-word mb-1">
+                      {activeChunk.title}
+                    </h1>
+                    <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
                     </span>
-                    <span className="mt-1 block truncate text-base font-semibold text-foreground">
-                      {nextChunk.title}
-                    </span>
-                  </span>
-                  <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                </button>
-              ) : nextFile ? (
-                <button
-                  onClick={() => onNav(nextFile.id, null)}
-                  className="group flex w-full items-center justify-between gap-4 rounded-xl border border-border p-5 text-left transition-all hover:border-primary/50 hover:bg-accent/40"
-                >
-                  <span className="min-w-0">
-                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Next chapter
-                    </span>
-                    <span className="mt-1 block truncate text-base font-semibold text-foreground">
-                      {stripExt(nextFile.name)}
-                    </span>
-                    {nextReadingMin != null && (
-                      <span className="mt-0.5 block text-xs text-muted-foreground">
-                        ≈ {nextReadingMin} min read
-                      </span>
-                    )}
-                  </span>
-                  <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                </button>
-              ) : allComplete ? (
-                <div className="rounded-xl border border-border bg-muted/30 p-8 text-center">
-                  <span className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                    <Check className="h-5 w-5" strokeWidth={3} />
-                  </span>
-                  <div className="text-base font-semibold text-foreground">
-                    Documentation completed
                   </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    You&apos;ve finished all {totalChapters}{" "}
-                    {totalChapters === 1 ? "chapter" : "chapters"}.
-                  </p>
                 </div>
-              ) : (
-                <div className="rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                  You&apos;ve reached the end of this chapter.
-                </div>
-              )}
-
-              <div className="mt-4 flex flex-col gap-2 items-start">
-                {prevChunk ? (
-                  <button
-                    onClick={() => onNav(file.id, prevChunk.id)}
-                    className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-                    Previous topic: {prevChunk.title}
-                  </button>
-                ) : prevFile ? (
-                  <button
-                    onClick={() => onNav(prevFile.id, null)}
-                    className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-                    Previous chapter: {stripExt(prevFile.name)}
-                  </button>
-                ) : null}
               </div>
-            </div>
-          )}
-        </article>
-      </div>
+            )}
 
-      {showTop && (
-        <button
-          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          aria-label="Back to top"
-          className="fixed bottom-6 right-6 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 shadow-lg backdrop-blur transition-all hover:bg-accent active:scale-90"
-        >
-          <ArrowUp className="h-4 w-4" />
-        </button>
-      )}
-    </>
+            {editMode ? (
+              <MarkdownEditor
+                ref={editorRef}
+                fileId={file.id}
+                initialContent={file.content}
+                onSave={saveDraft}
+                onDone={leaveEditMode}
+                onCancel={cancelEdit}
+                inspectMissed={inspectMissed}
+              />
+            ) : (
+              <div
+                key={singleMode ? "full" : activeChunk.id}
+                ref={contentRef}
+                onClick={onContentClick}
+              >
+                <SavedContext.Provider value={savedCtx}>
+                  <ReactMarkdown
+                    remarkPlugins={remarkPlugins}
+                    rehypePlugins={rehypePlugins}
+                    components={components}
+                  >
+                    {markdownSource}
+                  </ReactMarkdown>
+                </SavedContext.Provider>
+              </div>
+            )}
+
+            {/* One pager for both reading modes. Paged mode steps section by
+                section and falls through to the next file at the end of a
+                document; single page shows everything, so it steps files. */}
+            {!editMode && (
+              <ViewerPager
+                className="mt-16 border-t border-border"
+                nextEyebrow={
+                  nextChunk ? `Next ${chunkIndex + 2}/${allChunks.length}` : "Next chapter"
+                }
+                nav={{
+                  onPrev: () => {
+                    if (!singleMode && prevChunk) onNav(file.id, prevChunk.id);
+                  },
+                  onNext: () => {
+                    if (!singleMode && nextChunk) onNav(file.id, nextChunk.id);
+                  },
+                  prevDisabled: singleMode || !prevChunk,
+                  nextDisabled: singleMode || !nextChunk,
+                  prevLabel: !singleMode && prevChunk ? `Previous: ${prevChunk.title}` : "Previous",
+                  nextLabel: !singleMode && nextChunk ? nextChunk.title || "Next" : "Next",
+                }}
+              />
+            )}
+          </article>
+        </div>
+
+        <ReadingProgress
+          containerRef={containerRef}
+          contentRef={contentRef}
+          revision={markdownSource}
+          hidden={editMode}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Rendering a document means parsing markdown, painting highlights and walking
+ * the resulting tree, so this component must not re-render just because the app
+ * shell around it did. Every prop it takes is either a primitive or held to a
+ * stable identity in `DocsApp`, which is what makes the memo effective.
+ */
+export const MarkdownViewer = memo(MarkdownViewerImpl);
+
+/**
+ * Wraps a block (table, code fence, quote, image) with a hover star that saves
+ * it. The block's own rendered text is the quote the saved item re-anchors by,
+ * so a saved table is still findable after the document around it is edited.
+ */
+function SavableBlock({
+  blockType,
+  as: Wrapper = "div",
+  className = "",
+  identity,
+  children,
+}: {
+  blockType: SavedBlockType;
+  as?: "div" | "span";
+  className?: string;
+  /** Stands in for the text of blocks that have none — an image's src. */
+  identity?: string;
+  children: React.ReactNode;
+}) {
+  const ctx = useContext(SavedContext);
+  const ref = useRef<HTMLDivElement & HTMLSpanElement>(null);
+  const [text, setText] = useState("");
+
+  // Re-read the block's own text when the document changes. This used to run
+  // with no dependency array at all, so every render of the page walked the
+  // subtree of every table, code fence, quote and image on it — O(document) of
+  // DOM traversal per render, plus a second render pass to settle. Keying it to
+  // the rendered source keeps the star pointing at the right text (the whole
+  // point of the original comment) at a fraction of the cost.
+  useEffect(() => {
+    const next = ref.current?.textContent?.trim() ?? "";
+    setText((prev) => (prev === next ? prev : next));
+  }, [ctx?.revision]);
+
+  if (!ctx?.enabled) return <>{children}</>;
+
+  const probe = text || identity || "";
+  const existing = ctx.isSaved({ kind: "block", text: probe });
+
+  const toggle = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (existing) {
+      ctx.remove(existing.id);
+      return;
+    }
+    const container = ctx.containerRef.current;
+    const el = ref.current;
+    const offsets = container && el ? nodeOffsets(container, el) : null;
+    const quote = offsets?.text.trim() || probe;
+    ctx.toggle({
+      kind: "block",
+      blockType,
+      title: savedExcerpt(quote || identity || blockType, 90),
+      text: quote || undefined,
+      blockSrc: blockType === "image" ? identity : undefined,
+      subtopicId: ctx.subtopicId,
+      ...(offsets && container
+        ? {
+            start: offsets.start,
+            end: offsets.end,
+            ...contextAround(container, offsets.start, offsets.end),
+          }
+        : null),
+    });
+  };
+
+  return (
+    <Wrapper ref={ref} className={`docs-savable ${className}`.trim()}>
+      {children}
+      <button
+        type="button"
+        onClick={toggle}
+        data-saved={existing ? "true" : "false"}
+        className="docs-save-star"
+        title={existing ? "Saved — click to remove" : `Save this ${blockType}`}
+        aria-label={existing ? `Remove saved ${blockType}` : `Save ${blockType}`}
+      >
+        <Star className={`h-3.5 w-3.5 ${existing ? "fill-gold text-gold" : ""}`} />
+      </button>
+    </Wrapper>
   );
 }
 
 function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
   const [copied, setCopied] = useState(false);
+  const ctx = useContext(SavedContext);
   const text = Array.isArray(children)
     ? children.map((c) => (typeof c === "string" ? c : "")).join("")
     : String(children ?? "");
   const finalId = id || slugify(text);
+  const savedSection = ctx?.enabled
+    ? ctx.isSaved({ kind: "section", headingId: finalId })
+    : undefined;
   return (
     <Tag id={finalId} {...rest} className="group scroll-mt-24">
-      {typeof children === "string" ? highlight?.(children) ?? children : children}
+      {typeof children === "string" ? (highlight?.(children) ?? children) : children}
+      {ctx?.enabled && (
+        <button
+          onClick={() => {
+            if (savedSection) {
+              ctx.remove(savedSection.id);
+              return;
+            }
+            ctx.toggle({
+              kind: "section",
+              title: text || finalId,
+              headingId: finalId,
+              subtopicId: ctx.subtopicId,
+              text: text || undefined,
+            });
+          }}
+          /* The icon stays 16px, but the button carries a 36px hit area so it
+             is reachable with a fingertip. */
+          className={`ml-1 inline-flex h-9 w-9 items-center justify-center align-middle transition-opacity group-hover:opacity-100 ${
+            savedSection ? "opacity-100" : "opacity-0 [@media(hover:none)]:opacity-100"
+          }`}
+          title={savedSection ? "Saved — click to remove" : "Save this section"}
+          aria-label={savedSection ? "Remove saved section" : "Save section"}
+        >
+          <Star
+            className={`h-4 w-4 ${savedSection ? "fill-gold text-gold" : "text-muted-foreground"}`}
+          />
+        </button>
+      )}
       <button
         onClick={() => {
           const url = `${window.location.origin}${window.location.pathname}#${finalId}`;
@@ -710,7 +1487,7 @@ function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         }}
-        className="ml-2 inline-flex items-center align-middle opacity-0 transition-opacity group-hover:opacity-100"
+        className="ml-1 inline-flex h-9 w-9 items-center justify-center align-middle opacity-0 transition-opacity group-hover:opacity-100 [@media(hover:none)]:opacity-100"
         aria-label="Copy link to heading"
       >
         {copied ? (
@@ -732,15 +1509,38 @@ function CodeBlock({ children, ...rest }: any) {
   const cls = codeEl?.props?.className ?? "";
   if (typeof cls === "string" && /language-mermaid/.test(cls)) {
     const raw = extractText(codeEl?.props?.children);
-    return <Mermaid code={raw} />;
+    return <MermaidBlock code={raw} />;
   }
 
-  const lang = /language-([\w+-]+)/.exec(cls)?.[1];
+  const encodedLang = /language-([\w+-]+)/.exec(cls)?.[1];
+  const [lang, encodedMeta] = encodedLang?.split("--") ?? [];
+  const meta =
+    codeEl?.props?.node?.data?.meta ??
+    codeEl?.props?.node?.meta ??
+    encodedMeta?.replaceAll("-", " ") ??
+    "";
+
+  // ```mindmap fences hold JSON and draw as an interactive map, the same way
+  // ```mermaid fences hold diagram source. Any fence meta becomes the root's
+  // name when the JSON does not carry one.
+  if (lang === "mindmap") {
+    return <MindMapBlock code={extractText(codeEl?.props?.children)} title={meta} />;
+  }
+
+  if (lang === "interactive-html" || lang === "interactive-react") {
+    return (
+      <InteractiveBlock
+        kind={lang === "interactive-html" ? "html" : "react"}
+        code={extractText(codeEl?.props?.children)}
+        meta={meta}
+      />
+    );
+  }
 
   return (
     <div className="group relative my-6">
       {/* {lang && (
-        <div className="absolute left-3 top-2 z-10 rounded bg-background/60 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground backdrop-blur">
+        <div className="absolute left-3 top-2 z-10 rounded bg-background/60 px-1.5 py-0.5 text-xs font-mono uppercase tracking-wider text-muted-foreground backdrop-blur">
           {lang}
         </div>
       )} */}
@@ -751,7 +1551,10 @@ function CodeBlock({ children, ...rest }: any) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         }}
-        className="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2 py-1 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100"
+        aria-label={copied ? "Copied" : "Copy code"}
+        /* A hover-only reveal leaves this button unreachable on touch, so
+           `hover-none:opacity-100` pins it there. */
+        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       >
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
         {copied ? "Copied" : "Copy"}
@@ -770,14 +1573,63 @@ function extractText(node: any): string {
   return "";
 }
 
+// react-markdown exposes the code language to component overrides but not the
+// fenced-code info string. Keep the interactive flags in the language token so
+// `interactive-react preview`, `split`, and `playground` all survive parsing.
+function remarkInteractiveBlockMeta() {
+  return (tree: any) => {
+    const walk = (node: any) => {
+      if (node?.type === "code" && /^(interactive-html|interactive-react)$/.test(node.lang ?? "")) {
+        const flags = String(node.meta ?? "")
+          .toLowerCase()
+          .split(/\s+/)
+          .map((flag) => flag.replace(/[^a-z0-9]/g, ""))
+          .filter(Boolean)
+          .join("-");
+        if (flags) node.lang = `${node.lang}--${flags}`;
+      }
+      node?.children?.forEach(walk);
+    };
+    walk(tree);
+  };
+}
+
 const CALLOUT_MAP: Record<string, { icon: any; label: string; cls: string }> = {
-  NOTE: { icon: StickyNote, label: "Note", cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300" },
-  INFO: { icon: Info, label: "Info", cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300" },
-  TIP: { icon: Lightbulb, label: "Tip", cls: "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300" },
-  WARNING: { icon: AlertTriangle, label: "Warning", cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300" },
-  CAUTION: { icon: AlertTriangle, label: "Caution", cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300" },
-  DANGER: { icon: AlertOctagon, label: "Danger", cls: "border-rose-500/40 bg-rose-500/5 text-rose-700 dark:text-rose-300" },
-  IMPORTANT: { icon: AlertOctagon, label: "Important", cls: "border-violet-500/40 bg-violet-500/5 text-violet-700 dark:text-violet-300" },
+  NOTE: {
+    icon: StickyNote,
+    label: "Note",
+    cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300",
+  },
+  INFO: {
+    icon: Info,
+    label: "Info",
+    cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300",
+  },
+  TIP: {
+    icon: Lightbulb,
+    label: "Tip",
+    cls: "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
+  },
+  WARNING: {
+    icon: AlertTriangle,
+    label: "Warning",
+    cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300",
+  },
+  CAUTION: {
+    icon: AlertTriangle,
+    label: "Caution",
+    cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300",
+  },
+  DANGER: {
+    icon: AlertOctagon,
+    label: "Danger",
+    cls: "border-rose-500/40 bg-rose-500/5 text-rose-700 dark:text-rose-300",
+  },
+  IMPORTANT: {
+    icon: AlertOctagon,
+    label: "Important",
+    cls: "border-violet-500/40 bg-violet-500/5 text-violet-700 dark:text-violet-300",
+  },
 };
 
 function Callout({ children, ...rest }: any) {

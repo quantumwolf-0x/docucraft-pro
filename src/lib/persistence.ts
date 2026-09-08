@@ -13,6 +13,25 @@ export interface PersistedFile {
   id: string;
   name: string;
   content: string;
+  data?: string;
+  mimeType?: string;
+  size?: number;
+  addedAt?: number;
+  kind?: import("./markdown-utils").DocumentKind;
+  /** Sidebar folder this file is filed under; null/undefined = top level. */
+  folderId?: string | null;
+}
+
+/**
+ * A sidebar folder. Purely an organizational bucket over the flat file list —
+ * files keep living in `WorkspaceRecord.files` and point back with `folderId`,
+ * so a workspace whose folders are dropped (an older build, a share link)
+ * degrades to the flat list rather than losing documents.
+ */
+export interface FolderRecord {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface PersistedUI {
@@ -20,9 +39,13 @@ export interface PersistedUI {
   expanded: Record<string, boolean>;
   sidebarCollapsed: boolean;
   scrollTop: number;
+  fileOrder?: string[];
+  /** File ids in most-recently-opened order — drives the "Recent" chip. */
+  recentFileIds?: string[];
 }
 
 import type { Highlight } from "./dom-highlighter";
+import type { SavedItem } from "./saved-items";
 
 export interface WorkspaceRecord {
   id: string;
@@ -30,15 +53,21 @@ export interface WorkspaceRecord {
   createdAt: number;
   updatedAt: number;
   files: PersistedFile[];
-  // Bookmarked file ids, shown on the home page.
+  folders?: FolderRecord[];
+  /**
+   * Legacy `${fileId}#${subtopicId}` stars. Still written so a downgrade keeps
+   * working, but `saved` is the source of truth — see `migrateBookmarks`.
+   */
   bookmarks: string[];
+  /** Stars on files, sections, blocks and selections. */
+  saved?: SavedItem[];
   highlights?: Highlight[];
   ui: PersistedUI;
 }
 
 export type SaveStatus = "idle" | "saving" | "saved" | "restored";
 
-const DB_NAME = "docucraft-pro";
+const DB_NAME = "localdox";
 const DB_VERSION = 1;
 const STORE = "workspaces";
 
@@ -79,6 +108,26 @@ function request<T>(
   );
 }
 
+async function deleteDatabase(): Promise<void> {
+  const openDatabase = dbPromise;
+  dbPromise = null;
+
+  try {
+    (await openDatabase)?.close();
+  } catch {
+    // The database may never have opened; deletion can still proceed.
+  }
+
+  if (typeof indexedDB === "undefined") return;
+
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error ?? new Error("Could not delete local database"));
+    req.onblocked = () => reject(new Error("Close Localdox in other tabs before clearing storage"));
+  });
+}
+
 export const persistence = {
   getWorkspace(id: string) {
     return request<WorkspaceRecord | undefined>("readonly", (s) => s.get(id));
@@ -92,10 +141,59 @@ export const persistence = {
   listWorkspaces() {
     return request<WorkspaceRecord[]>("readonly", (s) => s.getAll());
   },
+  clearAll() {
+    return request<undefined>("readwrite", (s) => s.clear()).then(() => {});
+  },
+  destroy() {
+    return deleteDatabase();
+  },
 };
 
+// ---- scroll position (localStorage, per workspace) ----
+//
+// Scroll position used to ride along in the workspace record, which meant every
+// scroll-stop wrote the entire workspace back to IndexedDB — every document's
+// text plus every binary file's base64 data URL, structured-cloned in one go.
+// In a workspace holding a few PDFs that is tens of megabytes of copying on the
+// main thread, every time the reader stopped scrolling.
+//
+// It is one number. It lives in localStorage now, keyed per workspace, and the
+// workspace record is only written when the workspace itself actually changes.
+// `WorkspaceRecord.ui.scrollTop` is still populated on save so exports and
+// share links keep working.
+
+const SCROLL_KEY_PREFIX = "localdox:scroll:";
+
+export function saveScrollTop(workspaceId: string, top: number): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(SCROLL_KEY_PREFIX + workspaceId, String(Math.round(top)));
+  } catch {
+    /* storage unavailable — the position is simply not restored next time */
+  }
+}
+
+export function loadScrollTop(workspaceId: string): number | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SCROLL_KEY_PREFIX + workspaceId);
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export function emptyUI(): PersistedUI {
-  return { activeFileId: null, expanded: {}, sidebarCollapsed: false, scrollTop: 0 };
+  return {
+    activeFileId: null,
+    expanded: {},
+    sidebarCollapsed: false,
+    scrollTop: 0,
+    fileOrder: [],
+    recentFileIds: [],
+  };
 }
 
 export function newWorkspaceRecord(name: string): WorkspaceRecord {
@@ -106,7 +204,9 @@ export function newWorkspaceRecord(name: string): WorkspaceRecord {
     createdAt: now,
     updatedAt: now,
     files: [],
+    folders: [],
     bookmarks: [],
+    saved: [],
     highlights: [],
     ui: emptyUI(),
   };
@@ -114,17 +214,56 @@ export function newWorkspaceRecord(name: string): WorkspaceRecord {
 
 // ---- lightweight preferences (localStorage) ----
 
-export type ThemePref = "light" | "dark" | "system";
+// Reader themes each carry a full, WCAG-checked token palette (see styles.css).
+// The old "light"/"dark" values remain valid so existing prefs keep working.
+export type ThemePref = "light" | "sepia" | "dark" | "nord" | "black";
+
+// Themes whose surfaces are dark — used to keep the legacy `.dark` class in sync
+// so dark-only rules (code highlighting, katex, mermaid) still apply.
+export const DARK_THEMES: readonly ThemePref[] = ["dark", "nord", "black"];
+export const READER_THEMES: readonly ThemePref[] = ["light", "sepia", "dark", "nord", "black"];
+
+export function isDarkTheme(theme: ThemePref): boolean {
+  return DARK_THEMES.includes(theme);
+}
+
+// How a multi-section markdown document is laid out for reading.
+// "paginated" = one section per page with prev/next; "single" = whole doc scrolls.
+export type ReadingMode = "paginated" | "single";
+
+// Reading typeface. Each maps to a --font-body / --font-heading pair in styles.css.
+// "system" is the default — the device's own UI font (SF on macOS/iOS, Segoe on
+// Windows, Roboto on Android/Chrome OS).
+export type ReadingFont = "system" | "serif" | "newsreader" | "sans" | "hyperlegible";
+export const READING_FONTS: readonly ReadingFont[] = [
+  "system",
+  "serif",
+  "newsreader",
+  "sans",
+  "hyperlegible",
+];
 
 export interface Prefs {
   theme: ThemePref;
   lastWorkspaceId: string | null;
   // The reader's name, asked once and remembered for personalized greetings.
   name: string | null;
+  // True once the reader has answered the name prompt (set a name or skipped),
+  // so the greeting modal never asks again.
+  namePrompted: boolean;
+  readingMode: ReadingMode;
+  readingFont: ReadingFont;
 }
 
-const PREFS_KEY = "docucraft:prefs";
-const DEFAULT_PREFS: Prefs = { theme: "system", lastWorkspaceId: null, name: null };
+const PREFS_KEY = "localdox:prefs";
+const DEFAULT_PREFS: Prefs = {
+  theme: "dark",
+  lastWorkspaceId: null,
+  name: null,
+  namePrompted: false,
+  readingMode: "paginated",
+  readingFont: "system",
+};
 
 export function loadPrefs(): Prefs {
   if (typeof localStorage === "undefined") return { ...DEFAULT_PREFS };
@@ -148,7 +287,7 @@ export function savePrefs(patch: Partial<Prefs>): void {
 // ---- import / export (JSON) ----
 
 export function serializeWorkspace(w: WorkspaceRecord): string {
-  return JSON.stringify({ format: "docucraft-workspace", version: 1, workspace: w }, null, 2);
+  return JSON.stringify({ format: "localdox-workspace", version: 1, workspace: w }, null, 2);
 }
 
 /** Parse an exported workspace JSON into a fresh record (new id, no clobber). */
@@ -170,7 +309,22 @@ export function parseWorkspaceImport(json: string): WorkspaceRecord {
         id: typeof f.id === "string" ? f.id : crypto.randomUUID(),
         name: typeof f.name === "string" ? f.name : "untitled.md",
         content: f.content,
+        data: typeof f.data === "string" ? f.data : undefined,
+        mimeType: typeof f.mimeType === "string" ? f.mimeType : undefined,
+        size: typeof f.size === "number" ? f.size : undefined,
+        addedAt: typeof f.addedAt === "number" ? f.addedAt : undefined,
+        kind: typeof f.kind === "string" ? f.kind : undefined,
+        folderId: typeof f.folderId === "string" ? f.folderId : null,
       })),
+    folders: Array.isArray(w.folders)
+      ? (w.folders as Partial<FolderRecord>[])
+          .filter((f) => f && typeof f.id === "string" && typeof f.name === "string")
+          .map((f) => ({
+            id: f.id as string,
+            name: f.name as string,
+            createdAt: typeof f.createdAt === "number" ? f.createdAt : now,
+          }))
+      : [],
     bookmarks: Array.isArray(w.bookmarks)
       ? w.bookmarks.filter((b: any) => typeof b === "string")
       : [],
@@ -180,6 +334,8 @@ export function parseWorkspaceImport(json: string): WorkspaceRecord {
       expanded: typeof w.ui?.expanded === "object" ? w.ui.expanded : {},
       sidebarCollapsed: typeof w.ui?.sidebarCollapsed === "boolean" ? w.ui.sidebarCollapsed : false,
       scrollTop: typeof w.ui?.scrollTop === "number" ? w.ui.scrollTop : 0,
+      fileOrder: Array.isArray(w.ui?.fileOrder) ? w.ui.fileOrder : [],
+      recentFileIds: Array.isArray(w.ui?.recentFileIds) ? w.ui.recentFileIds : [],
     },
   };
 }

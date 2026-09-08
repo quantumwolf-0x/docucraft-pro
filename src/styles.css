@@ -2,7 +2,20 @@
 @source "../src";
 @import "tw-animate-css";
 @import "highlight.js/styles/github.css";
-@import "katex/dist/katex.min.css";
+
+/* Fonts and KaTeX's stylesheet are deliberately NOT imported here.
+ *
+ * Bundling them made this file render-blocking at ~212 kB and pulled 95 woff2
+ * subsets into the first load, for faces most readers never select. They are
+ * fetched on demand instead — see `src/lib/fonts.ts`:
+ *   - Inter (--font-ui) and JetBrains Mono (--font-mono) load just after first
+ *     paint, behind their system fallbacks.
+ *   - Source Serif 4 / Newsreader / Atkinson load only when the reader picks
+ *     that typeface in Settings.
+ *   - KaTeX's CSS loads only when a document actually contains math.
+ * Every `--font-*` var below already declares a system fallback stack, so the
+ * page is fully readable before any of them arrive.
+ */
 
 @custom-variant dark (&:is(.dark *));
 
@@ -61,10 +74,44 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-gold: var(--gold);
 }
 
 :root {
   --radius: 0.625rem;
+  /*
+   * Stacking scale — single source of truth for layering. Higher = closer to
+   * the user. Each tier must outrank the one above it in this list, and nothing
+   * in the app may exceed --z-menu.
+   *   --z-sticky   content sub-headers + toolbars (ViewerHeader, md toolbar)
+   *   --z-nav      global app chrome: top header, bottom nav, and their menus
+   *                — must sit ABOVE content sub-headers so header menus win
+   *   --z-dropdown popovers / dropdowns / tooltips / select menus
+   *   --z-overlay  full-screen viewers (lightbox, mermaid, command palette, drop)
+   *   --z-modal    modals + bottom sheets
+   *   --z-menu     menus torn out of their container and portaled to <body>.
+   *                Above --z-modal because the sidebar is itself a bottom sheet
+   *                on phones: a row's menu has to clear the sheet it opens from.
+   *                For portaled menus only — never for a whole panel or layer.
+   */
+  --z-sticky: 40;
+  --z-nav: 50;
+  --z-dropdown: 60;
+  --z-overlay: 100;
+  --z-modal: 200;
+  --z-menu: 300;
+  /* Default reading font = the device's own system UI font. */
+  --font-body:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
+    sans-serif;
+  --font-heading:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
+    sans-serif;
+  --font-ui:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --selection: color-mix(in oklab, var(--primary) 22%, transparent);
   --background: oklch(1 0 0);
   --foreground: oklch(0.129 0.042 264.695);
   --card: oklch(1 0 0);
@@ -97,9 +144,11 @@
   --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
   --sidebar-border: oklch(0.929 0.013 255.508);
   --sidebar-ring: oklch(0.704 0.04 256.788);
+  --gold: oklch(0.79 0.17 80);
 }
 
 .dark {
+  --selection: color-mix(in oklab, var(--primary) 30%, transparent);
   --background: oklch(0.129 0.042 264.695);
   --foreground: oklch(0.984 0.003 247.858);
   --card: oklch(0.208 0.042 265.755);
@@ -132,6 +181,110 @@
   --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.551 0.027 264.364);
+  --gold: oklch(0.79 0.17 80);
+}
+
+/*
+ * Reader themes. Selected via the `data-theme` attribute on <html>; dark-based
+ * themes (dark, nord, black) also carry the `.dark` class so dark-only rules
+ * (code highlighting, katex, mermaid) keep working. Each theme maps the full
+ * token set — text, secondary text, link, borders, table + selection surfaces —
+ * with WCAG AA contrast for extended reading. Placed after :root/.dark so the
+ * attribute selectors win.
+ */
+
+/* Sepia — warm paper, light-based. */
+[data-theme="sepia"] {
+  --background: oklch(0.955 0.017 83);
+  --foreground: oklch(0.29 0.033 60);
+  --card: oklch(0.94 0.018 83);
+  --card-foreground: oklch(0.29 0.033 60);
+  --popover: oklch(0.955 0.017 83);
+  --popover-foreground: oklch(0.29 0.033 60);
+  --primary: oklch(0.5 0.11 42);
+  --primary-foreground: oklch(0.97 0.015 83);
+  --secondary: oklch(0.9 0.025 83);
+  --secondary-foreground: oklch(0.32 0.033 60);
+  --muted: oklch(0.91 0.022 83);
+  --muted-foreground: oklch(0.45 0.03 58);
+  --accent: oklch(0.9 0.03 70);
+  --accent-foreground: oklch(0.3 0.033 60);
+  --destructive: oklch(0.55 0.2 27);
+  --destructive-foreground: oklch(0.97 0.015 83);
+  --border: oklch(0.86 0.025 78);
+  --input: oklch(0.86 0.025 78);
+  --ring: oklch(0.5 0.11 42);
+  --selection: color-mix(in oklab, var(--primary) 20%, transparent);
+}
+
+/* Nord — cool blue-grey, dark-based. */
+[data-theme="nord"] {
+  --selection: color-mix(in oklab, var(--primary) 30%, transparent);
+  --background: oklch(0.32 0.021 254);
+  --foreground: oklch(0.93 0.012 250);
+  --card: oklch(0.36 0.022 254);
+  --card-foreground: oklch(0.93 0.012 250);
+  --popover: oklch(0.36 0.022 254);
+  --popover-foreground: oklch(0.93 0.012 250);
+  --primary: oklch(0.82 0.075 218);
+  --primary-foreground: oklch(0.28 0.03 254);
+  --secondary: oklch(0.4 0.025 254);
+  --secondary-foreground: oklch(0.93 0.012 250);
+  --muted: oklch(0.4 0.025 254);
+  --muted-foreground: oklch(0.76 0.028 240);
+  --accent: oklch(0.42 0.03 220);
+  --accent-foreground: oklch(0.95 0.012 250);
+  --destructive: oklch(0.7 0.14 25);
+  --destructive-foreground: oklch(0.98 0.01 250);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.82 0.075 218);
+}
+
+/* Black — true OLED black, dark-based. */
+[data-theme="black"] {
+  --selection: oklch(1 0 0 / 22%);
+  --background: oklch(0 0 0);
+  --foreground: oklch(0.92 0 0);
+  --card: oklch(0.15 0 0);
+  --card-foreground: oklch(0.92 0 0);
+  --popover: oklch(0.15 0 0);
+  --popover-foreground: oklch(0.92 0 0);
+  --primary: oklch(0.85 0 0);
+  --primary-foreground: oklch(0.12 0 0);
+  --secondary: oklch(0.2 0 0);
+  --secondary-foreground: oklch(0.92 0 0);
+  --muted: oklch(0.2 0 0);
+  --muted-foreground: oklch(0.72 0 0);
+  --accent: oklch(0.25 0 0);
+  --accent-foreground: oklch(0.95 0 0);
+  --destructive: oklch(0.7 0.19 22);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 14%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.6 0 0);
+}
+
+/*
+ * Reading typeface, selected via the `data-font` attribute on <html>. Overrides
+ * the body + heading font vars; body/tables inherit body, code stays mono.
+ * Default (system) needs no override — it uses the :root values above.
+ */
+[data-font="serif"] {
+  --font-body: "Source Serif 4", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-heading: "Source Serif 4", ui-serif, Georgia, serif;
+}
+[data-font="sans"] {
+  --font-body: var(--font-ui);
+  --font-heading: var(--font-ui);
+}
+[data-font="newsreader"] {
+  --font-body: "Newsreader", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-heading: "Newsreader", ui-serif, Georgia, serif;
+}
+[data-font="hyperlegible"] {
+  --font-body: "Atkinson Hyperlegible", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-heading: "Atkinson Hyperlegible", ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
 @layer base {
@@ -142,36 +295,179 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    font-family: var(--font-ui);
+  }
+
+  ::selection {
+    background: var(--selection);
   }
 }
 
-/* Documentation prose typography */
+/*
+ * Translucent chrome (app header, viewer header, mobile bottom bar).
+ *
+ * These sit over scrolling content, so the browser re-samples what is behind
+ * them on every scroll frame. `backdrop-filter` is expensive enough that on a
+ * low-end GPU this alone keeps scrolling off 60fps — so the blur is treated as
+ * a progressive enhancement. `src/lib/device-tier.ts` tags <html> with
+ * `data-fx`, and the `lite` tier gets the same surface, opaque.
+ *
+ * `contain: paint` lets the compositor treat each bar as its own isolated box
+ * rather than re-considering the whole page when one of them repaints.
+ */
+.app-surface {
+  background-color: color-mix(in oklab, var(--background) 82%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  contain: paint;
+}
+
+[data-fx="lite"] .app-surface {
+  background-color: var(--background);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Every remaining decorative blur — overlays, popovers, floating controls — is
+   dropped on the lite tier too. They are all drawn over content, and several
+   animate, which is the worst case for the filter. */
+[data-fx="lite"] [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/*
+ * Expensive-to-paint blocks are skipped until they are near the viewport.
+ *
+ * Only blocks whose cost is in painting rather than in layout participate:
+ * tables, code fences, diagrams, images and interactive embeds. `auto` for the
+ * intrinsic size means the browser remembers each block's real height after it
+ * has been rendered once, so the scrollbar doesn't shift underneath the reader.
+ *
+ * Prose paragraphs are deliberately excluded — they are cheap, and skipping
+ * them would interfere with the text-offset lookups that anchor highlights.
+ */
+@supports (content-visibility: auto) {
+  .docs-prose .docs-table-wrap,
+  .docs-prose pre,
+  .docs-prose .docs-mermaid,
+  .docs-prose img {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 240px;
+  }
+}
+
+/* Documentation prose typography — tuned for long-form reading (Medium-style):
+   serif body at a comfortable measure, generous line-height, clear hierarchy. */
 .docs-prose {
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  font-size: 16px;
-  line-height: 1.75;
+  font-family: var(--font-body);
+  /* Fluid body size: ~1rem on a 320px phone up to 1.15rem from ~700px on. A
+     fixed 1.15rem was set for desktop and left the smallest screens with only
+     a handful of words per line. */
+  font-size: clamp(1rem, 0.93rem + 0.35vw, 1.15rem);
+  line-height: 1.8;
+  font-weight: 400;
+  letter-spacing: 0.003em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-.docs-prose h1, .docs-prose h2, .docs-prose h3, .docs-prose h4, .docs-prose h5, .docs-prose h6 {
+/* Long unbroken tokens — URLs, hashes, identifiers — must fold rather than
+   push the column wider than the viewport. `anywhere` only breaks when the
+   word genuinely cannot fit, so ordinary prose is unaffected. */
+.docs-prose p,
+.docs-prose li,
+.docs-prose a,
+.docs-prose h1,
+.docs-prose h2,
+.docs-prose h3,
+.docs-prose h4,
+.docs-prose h5,
+.docs-prose h6,
+.docs-prose blockquote,
+.docs-prose td,
+.docs-prose th {
+  overflow-wrap: anywhere;
+}
+/* Cap the reading measure (~68ch) so lines stay easy to track. */
+.docs-prose > * {
+  max-width: 68ch;
+  min-width: 0;
+}
+.docs-prose > .docs-table-wrap,
+.docs-prose > pre,
+.docs-prose > .workspace-artifact,
+.docs-prose > .interactive-block {
+  max-width: 100%;
+}
+.docs-prose h1,
+.docs-prose h2,
+.docs-prose h3,
+.docs-prose h4,
+.docs-prose h5,
+.docs-prose h6 {
+  font-family: var(--font-heading);
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--foreground);
   line-height: 1.25;
   position: relative;
 }
-.docs-prose h1 { font-size: 2.25rem; margin: 0 0 1.25rem; }
-.docs-prose h2 { font-size: 1.6rem; margin: 2.5rem 0 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
-.docs-prose h3 { font-size: 1.25rem; margin: 2rem 0 0.75rem; }
-.docs-prose h4 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
-.docs-prose h5, .docs-prose h6 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; }
-.docs-prose p { margin: 0 0 1.15rem; }
-.docs-prose a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
-.docs-prose a:hover { text-decoration-thickness: 2px; }
-.docs-prose ul, .docs-prose ol { margin: 0 0 1.15rem; padding-left: 1.5rem; }
-.docs-prose ul { list-style: disc; }
-.docs-prose ol { list-style: decimal; }
-.docs-prose li { margin: 0.35rem 0; }
-.docs-prose li > ul, .docs-prose li > ol { margin: 0.35rem 0; }
+/* Headings scale with the viewport too, so the hierarchy stays proportional to
+   the body text instead of dominating a narrow screen. */
+.docs-prose h1 {
+  font-size: clamp(1.75rem, 1.35rem + 2vw, 2.25rem);
+  margin: 0 0 1.25rem;
+}
+.docs-prose h2 {
+  font-size: clamp(1.35rem, 1.15rem + 1vw, 1.6rem);
+  margin: 2.5rem 0 1rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.docs-prose h3 {
+  font-size: clamp(1.15rem, 1.05rem + 0.5vw, 1.25rem);
+  margin: 2rem 0 0.75rem;
+}
+.docs-prose h4 {
+  font-size: 1.05rem;
+  margin: 1.5rem 0 0.5rem;
+}
+.docs-prose h5,
+.docs-prose h6 {
+  font-size: 0.95rem;
+  margin: 1.25rem 0 0.5rem;
+}
+.docs-prose p {
+  margin: 0 0 1.15rem;
+}
+.docs-prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.docs-prose a:hover {
+  text-decoration-thickness: 2px;
+}
+.docs-prose ul,
+.docs-prose ol {
+  margin: 0 0 1.15rem;
+  padding-left: 1.5rem;
+}
+.docs-prose ul {
+  list-style: disc;
+}
+.docs-prose ol {
+  list-style: decimal;
+}
+.docs-prose li {
+  margin: 0.35rem 0;
+}
+.docs-prose li > ul,
+.docs-prose li > ol {
+  margin: 0.35rem 0;
+}
 .docs-prose blockquote {
   margin: 1.25rem 0;
   padding: 0.5rem 1rem;
@@ -180,18 +476,20 @@
   background: color-mix(in oklab, var(--primary) 5%, transparent);
   border-radius: 0 0.375rem 0.375rem 0;
 }
-.docs-prose blockquote p:last-child { margin-bottom: 0; }
+.docs-prose blockquote p:last-child {
+  margin-bottom: 0;
+}
 .docs-prose code:not(pre code) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.875em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
   padding: 0.15em 0.4em;
   border-radius: 0.3rem;
   background: var(--muted);
   border: 1px solid var(--border);
 }
 .docs-prose pre {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.875rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
   line-height: 1.6;
   padding: 1rem 1.15rem;
   border-radius: 0.65rem;
@@ -199,9 +497,23 @@
   border: 1px solid var(--border);
   overflow-x: auto;
 }
-.docs-prose pre code { background: transparent; border: 0; padding: 0; font-size: inherit; }
-.docs-prose img { max-width: 100%; height: auto; border-radius: 0.5rem; margin: 1.25rem 0; }
-.docs-prose hr { margin: 2rem 0; border: 0; border-top: 1px solid var(--border); }
+.docs-prose pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+.docs-prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 1.25rem 0;
+}
+.docs-prose hr {
+  margin: 2rem 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
 /* Tables: scrollable, rounded, zebra rows, hover feedback */
 .docs-table-wrap {
   margin: 1.5rem 0;
@@ -210,15 +522,23 @@
   border-radius: 0.75rem;
   box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 4%, transparent);
 }
-.docs-prose .docs-table-wrap table { margin: 0; }
+.docs-prose .docs-table-wrap table {
+  margin: 0;
+}
 .docs-prose table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   margin: 1.5rem 0;
-  font-size: 0.9rem;
+  /* Match the body font so tables read consistently with the surrounding text;
+     tabular numerals keep columns aligned. */
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
 }
-.docs-prose th, .docs-prose td {
+.docs-prose th,
+.docs-prose td {
   text-align: left;
   padding: 0.7rem 1rem;
   border-bottom: 1px solid var(--border);
@@ -233,14 +553,72 @@
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
-.docs-prose tbody tr { transition: background-color 0.12s ease; }
-.docs-prose tbody tr:nth-child(even) { background: color-mix(in oklab, var(--muted) 35%, transparent); }
-.docs-prose tbody tr:hover { background: color-mix(in oklab, var(--primary) 6%, transparent); }
-.docs-prose tbody tr:last-child td { border-bottom: 0; }
-.docs-prose td + td, .docs-prose th + th { border-left: 1px solid color-mix(in oklab, var(--border) 55%, transparent); }
-.docs-prose input[type="checkbox"] { margin-right: 0.4rem; accent-color: var(--primary); }
+.docs-prose tbody tr {
+  transition: background-color 0.12s ease;
+}
+.docs-prose tbody tr:nth-child(even) {
+  background: color-mix(in oklab, var(--muted) 35%, transparent);
+}
+.docs-prose tbody tr:hover {
+  background: color-mix(in oklab, var(--primary) 6%, transparent);
+}
+.docs-prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+.docs-prose td + td,
+.docs-prose th + th {
+  border-left: 1px solid color-mix(in oklab, var(--border) 55%, transparent);
+}
+.docs-prose input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.125em;
+  height: 1.125em;
+  border: 1px solid color-mix(in oklab, var(--foreground) 25%, transparent);
+  border-radius: 5px;
+  background-color: transparent;
+  margin-right: 0.5rem;
+  vertical-align: -0.2em;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.docs-prose input[type="checkbox"]:hover {
+  border-color: color-mix(in oklab, var(--primary) 50%, transparent);
+}
+
+.docs-prose input[type="checkbox"]:checked {
+  background-color: var(--primary);
+  border-color: var(--primary);
+}
+
+.docs-prose input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  width: 0.25em;
+  height: 0.5em;
+  border-right: 2px solid var(--primary-foreground);
+  border-bottom: 2px solid var(--primary-foreground);
+  transform: translate(-50%, -50%) rotate(45deg);
+  animation: check-pop 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes check-pop {
+  0% {
+    transform: translate(-50%, -50%) rotate(45deg) scale(0);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(45deg) scale(1);
+    opacity: 1;
+  }
+}
 .docs-prose kbd {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8em;
   padding: 0.1em 0.4em;
   border: 1px solid var(--border);
@@ -249,40 +627,735 @@
   background: var(--muted);
 }
 
+/* Imported office files keep their own typography, but live within the reader's rhythm. */
+.docx-prose {
+  color: var(--foreground);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+.docx-prose h1,
+.docx-prose h2,
+.docx-prose h3 {
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+  margin: 2rem 0 0.8rem;
+}
+.docx-prose h1 {
+  font-size: 2rem;
+}
+.docx-prose h2 {
+  font-size: 1.5rem;
+}
+.docx-prose h3 {
+  font-size: 1.2rem;
+}
+.docx-prose p {
+  margin: 0 0 1rem;
+}
+.docx-prose ul,
+.docx-prose ol {
+  margin: 0 0 1rem 1.4rem;
+}
+.docx-prose table {
+  width: 100%;
+  margin: 1.5rem 0;
+  border-collapse: collapse;
+}
+.docx-prose th,
+.docx-prose td {
+  border: 1px solid var(--border);
+  padding: 0.65rem 0.8rem;
+  vertical-align: top;
+}
+.docx-prose img {
+  max-width: 100%;
+  height: auto;
+}
+.spreadsheet-table th,
+.spreadsheet-table td {
+  border-right: 1px solid var(--border);
+}
+.spreadsheet-table tbody tr:hover td {
+  background: color-mix(in oklab, var(--primary) 5%, var(--card));
+}
+.presentation-nav {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  height: 2.5rem;
+  width: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.1);
+  color: white;
+  transition: background-color 0.15s ease;
+}
+.presentation-nav:hover:not(:disabled) {
+  background: rgb(255 255 255 / 0.2);
+}
+.presentation-nav:disabled {
+  opacity: 0.25;
+}
+/* Checkerboard so transparent PNG/WebP/SVG/GIF regions read as transparent. */
+.image-canvas {
+  background-color: var(--color-muted);
+  background-image:
+    linear-gradient(45deg, rgb(128 128 128 / 0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgb(128 128 128 / 0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgb(128 128 128 / 0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, rgb(128 128 128 / 0.12) 75%);
+  background-size: 20px 20px;
+  background-position:
+    0 0,
+    0 10px,
+    10px -10px,
+    -10px 0;
+  touch-action: none;
+}
+.presentation-slide {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: min(100%, 1100px);
+  overflow: hidden;
+  border-radius: 0.25rem;
+  background: white;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.45);
+}
+/* Embedded-deck swipe buttons: the only controls shown in reading mode. */
+.deck-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 10;
+  display: flex;
+  height: 2.5rem;
+  width: 2.5rem;
+  transform: translateY(-50%);
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.4);
+  color: white;
+  backdrop-filter: blur(4px);
+  transition:
+    background-color 0.15s ease,
+    opacity 0.15s ease;
+}
+.deck-nav:hover:not(:disabled) {
+  background: rgb(0 0 0 / 0.62);
+}
+.deck-nav:disabled {
+  pointer-events: none;
+  opacity: 0;
+}
+.presentation-rail {
+  display: flex;
+  gap: 0.7rem;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+  padding: 0.8rem 1rem;
+}
+.presentation-thumb {
+  display: flex;
+  gap: 0.35rem;
+  min-width: 115px;
+  text-align: left;
+}
+.presentation-thumb-card {
+  display: flex;
+  aspect-ratio: 16 / 9;
+  width: 105px;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 0.15rem;
+  background: var(--muted);
+  padding: 0.5rem;
+  color: var(--foreground);
+}
+.presentation-thumb.is-active .presentation-thumb-card {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 25%, transparent);
+}
+.presentation-thumb-card strong {
+  overflow: hidden;
+  font-size: 0.48rem;
+  line-height: 1.2;
+}
+.presentation-thumb-card small {
+  margin-top: 0.2rem;
+  overflow: hidden;
+  font-size: 0.32rem;
+  line-height: 1.2;
+  color: var(--muted-foreground);
+}
+
+/* Inline workspace artifacts: a document strip around a focused, reusable preview. */
+.workspace-artifact {
+  margin: 1.5rem 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: var(--card);
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+.workspace-artifact-header {
+  display: flex;
+  min-height: 3.25rem;
+  align-items: center;
+  gap: 0.55rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 38%, var(--card));
+  padding: 0.45rem 0.65rem;
+}
+.artifact-collapse,
+.artifact-action {
+  display: inline-flex;
+  height: 1.9rem;
+  width: 1.9rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.4rem;
+  color: var(--muted-foreground);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.artifact-collapse:hover,
+.artifact-action:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.artifact-action:disabled,
+.artifact-action[aria-disabled="true"] {
+  pointer-events: none;
+  opacity: 0.35;
+}
+.artifact-viewport {
+  max-height: 38rem;
+  overflow: auto;
+  background: var(--background);
+}
+.artifact-viewport > section {
+  min-height: 0 !important;
+}
+.artifact-viewport > section > :first-child {
+  display: none;
+}
+.artifact-viewport iframe {
+  height: 34rem !important;
+  min-height: 22rem;
+}
+.presentation-embed-viewport {
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--background);
+}
+.presentation-embed-viewport .presentation-shell:not(:fullscreen) {
+  min-height: 0 !important;
+  height: auto !important;
+}
+.presentation-embed-viewport .presentation-shell:not(:fullscreen) > div.flex-col {
+  min-height: 0 !important;
+  height: auto !important;
+}
+.presentation-embed-viewport .presentation-slide {
+  width: min(100%, 760px);
+}
+.presentation-embed-viewport .presentation-rail {
+  position: sticky;
+  bottom: 0;
+}
+.workspace-artifact-footer {
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 30%, var(--card));
+  padding: 0.4rem 0.8rem;
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.artifact-image {
+  display: block;
+  max-height: 34rem;
+  width: 100%;
+  object-fit: contain;
+  background: color-mix(in oklab, var(--muted) 42%, var(--background));
+}
+.artifact-media {
+  display: block;
+  max-height: 34rem;
+  width: 100%;
+  background: #090b10;
+}
+.artifact-html {
+  display: block;
+  height: 34rem;
+  width: 100%;
+  border: 0;
+  background: white;
+}
+.artifact-markdown {
+  padding: 1.25rem 1.5rem;
+}
+.artifact-markdown .workspace-artifact {
+  max-width: 100%;
+}
+.artifact-loading,
+.artifact-error {
+  margin: 1rem 0;
+  border: 1px dashed var(--border);
+  border-radius: 0.65rem;
+  padding: 0.8rem 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+.artifact-error strong {
+  color: var(--foreground);
+}
+@media (max-width: 640px) {
+  .artifact-viewport {
+    max-height: 30rem;
+  }
+  .artifact-viewport iframe,
+  .artifact-html {
+    height: 25rem !important;
+  }
+  .workspace-artifact-header {
+    gap: 0.4rem;
+  }
+  .artifact-action:nth-of-type(3) {
+    display: none;
+  }
+  .artifact-markdown {
+    padding: 1rem;
+  }
+}
+
 /* Dark mode code highlighting override */
-.dark .hljs { color: #c9d1d9; background: transparent; }
-.dark .hljs-comment, .dark .hljs-quote { color: #8b949e; }
-.dark .hljs-keyword, .dark .hljs-selector-tag { color: #ff7b72; }
-.dark .hljs-string, .dark .hljs-attr { color: #a5d6ff; }
-.dark .hljs-number, .dark .hljs-literal { color: #79c0ff; }
-.dark .hljs-title, .dark .hljs-name, .dark .hljs-section { color: #d2a8ff; }
-.dark .hljs-type, .dark .hljs-built_in { color: #ffa657; }
-.dark .hljs-tag { color: #7ee787; }
-.dark .hljs-variable { color: #ffa657; }
+.dark .hljs {
+  color: #c9d1d9;
+  background: transparent;
+}
+.dark .hljs-comment,
+.dark .hljs-quote {
+  color: #8b949e;
+}
+.dark .hljs-keyword,
+.dark .hljs-selector-tag {
+  color: #ff7b72;
+}
+.dark .hljs-string,
+.dark .hljs-attr {
+  color: #a5d6ff;
+}
+.dark .hljs-number,
+.dark .hljs-literal {
+  color: #79c0ff;
+}
+.dark .hljs-title,
+.dark .hljs-name,
+.dark .hljs-section {
+  color: #d2a8ff;
+}
+.dark .hljs-type,
+.dark .hljs-built_in {
+  color: #ffa657;
+}
+.dark .hljs-tag {
+  color: #7ee787;
+}
+.dark .hljs-variable {
+  color: #ffa657;
+}
 
 /* Search highlight flash */
 @keyframes docs-flash-anim {
-  0% { background-color: color-mix(in oklab, var(--primary) 25%, transparent); }
-  100% { background-color: transparent; }
+  0% {
+    background-color: color-mix(in oklab, var(--primary) 25%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
 }
-.docs-flash { animation: docs-flash-anim 1.6s ease-out; border-radius: 0.25rem; }
+.docs-flash {
+  animation: docs-flash-anim 1.6s ease-out;
+  border-radius: 0.25rem;
+}
 
 /* Task list checkbox alignment */
-.docs-prose li.task-list-item { list-style: none; margin-left: -1.25rem; }
-.docs-prose li.task-list-item input { margin-right: 0.5rem; }
+.docs-prose li.task-list-item {
+  list-style: none;
+  margin-left: -1.25rem;
+}
+.docs-prose li.task-list-item input {
+  margin-right: 0.5rem;
+}
 
 /* Better dark-mode katex */
-.dark .katex { color: var(--foreground); }
+.dark .katex {
+  color: var(--foreground);
+}
 
-/* Mermaid diagrams render responsively inside the pan/zoom stage */
-.docs-mermaid svg { max-width: 100%; height: auto; display: block; }
+/* Mermaid diagrams render at their natural readable size inside the pan/zoom stage */
+.docs-mermaid svg {
+  max-width: none !important;
+  display: block;
+}
 
 /* Persistent highlights via the CSS Custom Highlight API. Rendered without
    mutating the DOM, so they survive React re-renders and span multiple nodes. */
-::highlight(dc-hl-0) { background-color: #fde047; color: #0a0a0a; }
-::highlight(dc-hl-1) { background-color: #86efac; color: #0a0a0a; }
-::highlight(dc-hl-2) { background-color: #93c5fd; color: #0a0a0a; }
-::highlight(dc-hl-3) { background-color: #f9a8d4; color: #0a0a0a; }
-::highlight(dc-hl-4) { background-color: #fdba74; color: #0a0a0a; }
-::highlight(dc-hl-5) { background-color: #d8b4fe; color: #0a0a0a; }
-::highlight(dc-query) { background-color: color-mix(in oklab, var(--primary) 30%, transparent); }
+::highlight(dc-hl-0) {
+  background-color: #fde047;
+  color: #0a0a0a;
+}
+::highlight(dc-hl-1) {
+  background-color: #86efac;
+  color: #0a0a0a;
+}
+::highlight(dc-hl-2) {
+  background-color: #93c5fd;
+  color: #0a0a0a;
+}
+::highlight(dc-hl-3) {
+  background-color: #f9a8d4;
+  color: #0a0a0a;
+}
+::highlight(dc-hl-4) {
+  background-color: #fdba74;
+  color: #0a0a0a;
+}
+::highlight(dc-hl-5) {
+  background-color: #d8b4fe;
+  color: #0a0a0a;
+}
+::highlight(dc-query) {
+  background-color: color-mix(in oklab, var(--primary) 30%, transparent);
+}
+
+/* Opening a saved item scrolls to it and flashes it once, so the reader can see
+   which passage the star pointed at without it being permanently marked. */
+::highlight(dc-saved-flash) {
+  background-color: color-mix(in oklab, var(--gold) 40%, transparent);
+}
+.docs-saved-flash {
+  animation: docs-saved-flash 1.8s ease-out 1;
+  border-radius: 0.5rem;
+}
+@keyframes docs-saved-flash {
+  0%,
+  55% {
+    background-color: color-mix(in oklab, var(--gold) 22%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--gold) 30%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+/* Star affordance on block elements (tables, code, quotes, images). Hidden
+   until the block is hovered — or always visible once the block is saved. */
+.docs-savable {
+  position: relative;
+}
+.docs-save-star {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.75rem;
+  width: 1.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background-color: color-mix(in oklab, var(--background) 85%, transparent);
+  color: var(--muted-foreground);
+  opacity: 0;
+  backdrop-filter: blur(4px);
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
+}
+.docs-savable:hover > .docs-save-star,
+.docs-save-star:focus-visible,
+.docs-save-star[data-saved="true"] {
+  opacity: 1;
+}
+.docs-save-star:hover {
+  color: var(--foreground);
+}
+/* Code fences already carry a Copy button in that corner. */
+.docs-savable-code > .docs-save-star {
+  top: 0.875rem;
+  right: 5.5rem;
+}
+/* Mermaid diagrams have zoom controls. Put the star next to them. */
+.docs-savable-mermaid > .docs-save-star {
+  top: 0.5rem;
+  right: 8.5rem;
+  z-index: 20;
+  border-color: color-mix(in oklab, var(--border) 60%, transparent);
+  background-color: color-mix(in oklab, var(--background) 90%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.docs-savable-mermaid > .docs-save-star:active {
+  transform: scale(0.95);
+}
+.docs-savable-mermaid:hover .mermaid-controls {
+  opacity: 1 !important;
+}
+/* On a diagram the star is one of a row of overlay controls (zoom, download,
+   fullscreen) that sit *on top of* the picture. Keeping it pinned there once
+   saved — the behaviour every other block wants — leaves a button parked over
+   the diagram while it is being read. It reveals and hides with the zoom
+   controls instead; saved state is still legible the moment the row appears. */
+.docs-savable-mermaid > .docs-save-star,
+.docs-savable-mermaid > .docs-save-star[data-saved="true"] {
+  opacity: 0;
+}
+.docs-savable-mermaid:hover > .docs-save-star,
+.docs-savable-mermaid > .docs-save-star:focus-visible {
+  opacity: 1;
+}
+/* Touch devices have no hover, so the star cannot be revealed by pointing at
+   the block. It stays visible there — but only once it has somewhere to sit
+   that is not on top of the content (see the offsets below). */
+@media (hover: none) {
+  .docs-save-star {
+    opacity: 1;
+  }
+  /* Diagrams keep the tap-to-reveal behaviour their zoom controls already have,
+     so the overlay row does not sit permanently over the picture. */
+  .docs-savable-mermaid > .docs-save-star,
+  .docs-savable-mermaid > .docs-save-star[data-saved="true"] {
+    opacity: 0;
+  }
+  .docs-savable-mermaid:focus-within > .docs-save-star {
+    opacity: 1;
+  }
+}
+@media (max-width: 768px) {
+  /* A permanently visible star parked in the top-right corner covered the first
+     table header cell and the code fence's first line. On narrow screens the
+     block gets a gutter of its own above the content and the star sits in it,
+     overlapping nothing. */
+  .docs-savable-table,
+  .docs-savable-code {
+    padding-top: 2.25rem;
+  }
+  .docs-savable-table > .docs-save-star,
+  .docs-savable-code > .docs-save-star {
+    top: 0.25rem;
+    right: 0.25rem;
+  }
+  /* The Copy button owns the code fence's right corner; the star sits beside it. */
+  .docs-savable-code > .docs-save-star {
+    right: 5rem;
+  }
+  /* Comfortable touch target — 1.75rem was under the 36px minimum. */
+  .docs-save-star {
+    height: 2.25rem;
+    width: 2.25rem;
+  }
+}
+
+/* Interactive markdown blocks: a compact workbench that keeps authored code
+   beside the result without allowing demo styles to touch the document. */
+.interactive-block {
+  margin: 1.75rem 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--border) 88%, var(--foreground));
+  border-radius: 0.85rem;
+  background: var(--background);
+  box-shadow: 0 14px 35px color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+.interactive-toolbar {
+  display: flex;
+  min-height: 2.9rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.55rem 0.45rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(90deg, color-mix(in oklab, var(--primary) 8%, transparent), transparent 35%),
+    var(--muted);
+}
+.interactive-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--foreground);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.interactive-title svg {
+  color: var(--primary);
+}
+.interactive-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+.interactive-actions button {
+  display: inline-flex;
+  height: 1.9rem;
+  width: 1.9rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  color: var(--muted-foreground);
+  transition:
+    color 140ms ease,
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+.interactive-actions button:hover {
+  border-color: var(--border);
+  background: var(--background);
+  color: var(--foreground);
+}
+.interactive-body {
+  background: var(--background);
+}
+.interactive-source,
+.interactive-editor {
+  display: block;
+  width: 100%;
+  min-height: 14rem;
+  margin: 0;
+  padding: 1rem 1.1rem;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  resize: vertical;
+  background: color-mix(in oklab, var(--muted) 70%, var(--background));
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.79rem;
+  line-height: 1.65;
+  text-align: left;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+.interactive-editor:focus {
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--primary) 55%, transparent);
+}
+.interactive-preview {
+  position: relative;
+  min-width: 0;
+  background: var(--background);
+}
+.interactive-preview iframe {
+  display: block;
+  width: 100%;
+  min-height: 11rem;
+  border: 0;
+  background: transparent;
+  transition: height 180ms ease;
+}
+.interactive-loading {
+  display: grid;
+  min-height: 12rem;
+  place-items: center;
+  color: var(--muted-foreground);
+  font-size: 0.84rem;
+}
+.interactive-split {
+  min-height: 20rem;
+}
+.interactive-split > [data-panel-group-direction="horizontal"] {
+  min-width: 0;
+}
+.interactive-error {
+  position: absolute;
+  inset: auto 0 0;
+  max-height: 65%;
+  overflow: auto;
+  padding: 0.8rem 1rem;
+  border-top: 1px solid color-mix(in oklab, var(--destructive) 42%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 10%, var(--background));
+  color: var(--foreground);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.interactive-error > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--destructive);
+}
+.interactive-error button {
+  color: var(--muted-foreground);
+}
+.interactive-error p {
+  margin: 0.35rem 0 0;
+}
+.interactive-error pre {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+}
+.interactive-block-fullscreen {
+  position: fixed;
+  inset: 1rem;
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  box-shadow: 0 24px 80px color-mix(in oklab, var(--foreground) 32%, transparent);
+}
+.interactive-block-fullscreen .interactive-body {
+  flex: 1;
+  overflow: auto;
+}
+.interactive-block-fullscreen .interactive-preview iframe {
+  height: min(72vh, 960px) !important;
+}
+@media (max-width: 640px) {
+  .interactive-split {
+    min-height: 34rem;
+    flex-direction: column;
+  }
+  .interactive-split > [data-panel-group-direction="horizontal"] {
+    min-height: 15rem;
+    width: 100% !important;
+  }
+  .interactive-block-fullscreen {
+    inset: 0.5rem;
+  }
+}
+
+/* Force visible, styled WebKit scrollbars */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted-foreground);
+}

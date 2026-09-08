@@ -1,25 +1,58 @@
-// @lovable.dev/vite-tanstack-config already includes the following — do NOT add them manually
-// or the app will break with duplicate plugins:
-//   - TanStack devtools (dev-only, first), tanstackStart, viteReact, tailwindcss, tsConfigPaths,
-//     nitro (build-only using cloudflare as a default target), VITE_* env injection, @ path alias,
-//     React/TanStack dedupe, error logger plugins, and sandbox detection (port/host/strictPort).
-// You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
-import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { defineConfig } from "vite";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import viteReact from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import tsConfigPaths from "vite-tsconfig-paths";
+import { nitro } from "nitro/vite";
+import path from "path";
 
 export default defineConfig({
-  tanstackStart: {
-    // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-    // nitro/vite builds from this
-    server: { entry: "server" },
+  plugins: [
+    tanstackStart({
+      server: { entry: "server" },
+      // Generate TanStack Start's client-only HTML shell for Firebase Hosting.
+      spa: {
+        enabled: true,
+        prerender: {
+          crawlLinks: true,
+        },
+      },
+    }),
+    viteReact(),
+    tailwindcss(),
+    tsConfigPaths({ projects: ["./tsconfig.json"] }),
+    nitro({ preset: "node-server" }),
+  ],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
   },
-  vite: {
-    optimizeDeps: {
-      // Pre-bundle mermaid at cold start. It lazily imports its diagram parsers
-      // (flowDiagram, erDiagram, …) as dynamic imports; if Vite discovers them
-      // late and re-optimizes mid-session, the already-hashed chunk URLs 404
-      // with "Failed to fetch dynamically imported module". Forcing the include
-      // resolves them upfront so the hashes stay stable for the session.
-      include: ["mermaid"],
+  optimizeDeps: {
+    // `mermaid` is deliberately NOT pre-bundled. It is loaded lazily (see
+    // MermaidLazy.tsx) and forcing it through optimizeDeps pulled its whole
+    // dependency tree — cytoscape, dagre, d3 — into the dev-server warm-up and
+    // encouraged it back into the initial graph.
+    exclude: ["mermaid", "@babel/standalone", "xlsx", "mammoth"],
+    include: ["dayjs", "@braintree/sanitize-url"],
+  },
+  build: {
+    // Terser-grade minification is worth the build time here: the app ships a
+    // large markdown pipeline, and this is the cheapest win for low-end devices
+    // on slow connections.
+    cssMinify: "lightningcss",
+    // These are all code-split now; anything still large is a real regression
+    // rather than an expected big vendor chunk.
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        // Keep the React runtime in one long-lived chunk. It changes far less
+        // often than app code, so a deploy shouldn't invalidate it.
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return;
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "react";
+        },
+      },
     },
   },
 });

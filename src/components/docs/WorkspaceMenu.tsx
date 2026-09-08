@@ -1,5 +1,16 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Plus, Download, Upload, Trash2, Check, FolderOpen } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  ChevronDown,
+  PlusCircle,
+  Download,
+  Upload,
+  Check,
+  FolderOpen,
+  Users,
+  Settings,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 interface WorkspaceLite {
   id: string;
@@ -10,11 +21,19 @@ interface Props {
   workspaces: WorkspaceLite[];
   currentId: string | null;
   onSwitch: (id: string) => void;
-  onNew: () => void;
+  onNew: (name: string) => void;
+  onDelete: (id: string) => void;
   onImport: (file: File) => void;
   onExport: () => void;
-  onDelete: (id: string) => void;
-  onRename: (id: string, newName: string) => void;
+  onShare: () => void;
+  /**
+   * "pill" = compact header trigger; "sidebar" = full-width name;
+   * "icon" = the monogram alone, for the collapsed rail where there is no room
+   * for a label but the same menu still has to be reachable.
+   */
+  variant?: "pill" | "sidebar" | "icon";
+  /** Callback to open settings (typically rendered in sidebar) */
+  onSettings?: () => void;
 }
 
 export function WorkspaceMenu({
@@ -22,19 +41,116 @@ export function WorkspaceMenu({
   currentId,
   onSwitch,
   onNew,
+  onDelete,
   onImport,
   onExport,
-  onDelete,
-  onRename,
+  onShare,
+  onSettings,
+  variant = "pill",
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const sidebar = variant === "sidebar";
+  const icon = variant === "icon";
+  // Both rail variants anchor the same way: the trigger sits at the bottom of a
+  // left-hand rail, so the menu opens upward and left-aligned.
+  const leftAnchored = sidebar || icon;
+
+  // The menu is portaled to <body> so it escapes every header/content stacking
+  // context and can never be painted under a document panel. Because it lives
+  // outside the normal flow, we position it manually from the trigger's rect
+  // and keep it pinned as the page scrolls or resizes.
+  const MENU_MAX_W = 280;
+  const GAP = 6;
+  const EDGE = 8;
+  const [pos, setPos] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const el = rootRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+
+      // Never wider than the viewport allows. A fixed 280 overflowed the right
+      // edge on narrow screens, which is what made the sidebar menu look broken
+      // on small windows and phones.
+      //
+      // In the expanded sidebar the panel is also held clear of the rail's own
+      // right edge: matched to the trigger's width it ended up exactly flush
+      // with the sidebar border, so the two lines merged into one. The trigger
+      // spans the rail, so its width is the rail's usable width.
+      const width = Math.min(
+        MENU_MAX_W,
+        window.innerWidth - EDGE * 2,
+        sidebar ? Math.max(200, r.width - EDGE) : Infinity,
+      );
+      const desired = leftAnchored ? r.left : r.right - width; // rail left-aligns, pill right-aligns
+      const left = Math.min(Math.max(EDGE, desired), window.innerWidth - width - EDGE);
+
+      // Space on each side of the trigger, and the side we would rather use:
+      // upwards in the sidebar (its trigger sits at the bottom of the rail),
+      // downwards for the header pill.
+      const above = r.top - GAP - EDGE;
+      const below = window.innerHeight - r.bottom - GAP - EDGE;
+      const MIN_H = 180;
+
+      // Flip to the other side when the preferred one cannot show a usable
+      // menu. Clamping the height alone was not enough: a short window still
+      // anchored the sidebar menu upwards from a trigger near the bottom, which
+      // put the whole panel above the top edge of the screen.
+      const preferAbove = leftAnchored;
+      const useAbove = preferAbove
+        ? above >= MIN_H || above >= below
+        : !(below >= MIN_H || below >= above);
+
+      if (useAbove) {
+        setPos({
+          bottom: window.innerHeight - r.top + GAP,
+          left,
+          width,
+          maxHeight: Math.max(120, above),
+        });
+      } else {
+        setPos({
+          top: r.bottom + GAP,
+          left,
+          width,
+          maxHeight: Math.max(120, below),
+        });
+      }
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    // Mobile browsers resize the visual viewport (URL bar, keyboard) without
+    // firing a window resize, which left the menu detached from its trigger.
+    window.visualViewport?.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("scroll", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("scroll", place);
+    };
+  }, [open, leftAnchored, sidebar]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", onDown);
@@ -45,90 +161,210 @@ export function WorkspaceMenu({
     };
   }, [open]);
 
+  // Reset the inline create field whenever the menu closes.
+  useEffect(() => {
+    if (!open) {
+      setCreating(false);
+      setNewName("");
+    }
+  }, [open]);
+
   const current = workspaces.find((w) => w.id === currentId);
 
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-8 max-w-[180px] items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Workspaces"
-      >
-        <FolderOpen className="h-4 w-4 shrink-0" />
-        <span className="truncate">{current?.name ?? "Workspace"}</span>
-        <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
-      </button>
+  const handleCreate = () => {
+    const name = newName.trim();
+    if (!name) return;
+    onNew(name);
+    setCreating(false);
+    setNewName("");
+    setOpen(false);
+  };
 
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-64 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
-          <div className="max-h-56 overflow-y-auto p-1">
-            {workspaces.map((w) => (
-              <div
-                key={w.id}
-                className="group flex items-center gap-1 rounded-md hover:bg-accent"
-              >
-                <button
+  return (
+    <div ref={rootRef} className={`relative ${sidebar ? "min-w-0 flex-1 z-(--z-dropdown)" : ""}`}>
+      {sidebar ? (
+        // The account-row shape from the reference: a round monogram, the
+        // workspace name with a quiet second line, and the whole row as the
+        // trigger.
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-sidebar-accent"
+          title="Workspaces"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground">
+            {initials(current?.name ?? "Localdox")}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-sidebar-foreground">
+              {current?.name ?? "Localdox"}
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">Workspace</span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground opacity-70" />
+        </button>
+      ) : icon ? (
+        // Collapsed rail: the monogram alone, opening the same menu the
+        // expanded sidebar's row does.
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          aria-label="Workspaces"
+          title={current?.name ?? "Workspace"}
+        >
+          {initials(current?.name ?? "Localdox")}
+        </button>
+      ) : (
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="inline-flex h-8 max-w-xs items-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="Workspaces"
+        >
+          <FolderOpen className="h-4 w-4 shrink-0" />
+          <span className="truncate">{current?.name ?? "Workspace"}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+        </button>
+      )}
+
+      {open &&
+        pos &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{
+              position: "fixed",
+              top: pos.top,
+              bottom: pos.bottom,
+              left: pos.left,
+              width: pos.width,
+              maxHeight: pos.maxHeight,
+            }}
+            className="z-(--z-dropdown) flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {/* Header: the workspace you are in, echoing the trigger. */}
+              {current && (
+                <div className="flex items-center gap-3 px-2 py-2">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground">
+                    {initials(current.name)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-foreground">
+                      {current.name}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">Workspace</span>
+                  </span>
+                  <Check className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </div>
+              )}
+
+              {/* Switching: the other workspaces, when there are any. */}
+              {workspaces.length > 1 && (
+                <>
+                  <div className="my-1.5 h-px bg-border" />
+                  <div className="flex flex-col">
+                    {workspaces
+                      .filter((w) => w.id !== currentId)
+                      .map((w) => (
+                        <MenuRow
+                          key={w.id}
+                          icon={FolderOpen}
+                          label={w.name}
+                          onClick={() => {
+                            onSwitch(w.id);
+                            setOpen(false);
+                          }}
+                        />
+                      ))}
+                  </div>
+                </>
+              )}
+
+              <div className="my-1.5 h-px bg-border" />
+
+              {/* What you do to this workspace, then what you do to the app. */}
+              <div className="flex flex-col">
+                <MenuRow
+                  icon={Upload}
+                  label="Import workspace"
+                  onClick={() => fileRef.current?.click()}
+                />
+                <MenuRow
+                  icon={Download}
+                  label="Export workspace"
                   onClick={() => {
-                    onSwitch(w.id);
+                    onExport();
                     setOpen(false);
                   }}
-                  className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm"
-                >
-                  <Check
-                    className={`h-3.5 w-3.5 shrink-0 ${w.id === currentId ? "text-primary" : "opacity-0"}`}
+                />
+                <MenuRow
+                  icon={Users}
+                  label="Share workspace"
+                  onClick={() => {
+                    onShare();
+                    setOpen(false);
+                  }}
+                />
+              </div>
+
+              <div className="my-1.5 h-px bg-border" />
+
+              <div className="flex flex-col">
+                {!creating && (
+                  <MenuRow
+                    icon={PlusCircle}
+                    label="New workspace"
+                    onClick={() => {
+                      setCreating(true);
+                      setNewName("");
+                    }}
                   />
-                  <span className="truncate">{w.name}</span>
-                </button>
-                {workspaces.length > 1 && (
-                  <div className="mr-1 flex items-center opacity-0 transition-opacity group-hover:opacity-100">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete(w.id);
-                      }}
-                      className="rounded p-1"
-                      aria-label={`Delete ${w.name}`}
-                      title="Delete workspace"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-                    </button>
-                  </div>
+                )}
+                {onSettings && (
+                  <MenuRow
+                    icon={Settings}
+                    label="Settings"
+                    onClick={() => {
+                      onSettings();
+                      setOpen(false);
+                    }}
+                  />
                 )}
               </div>
-            ))}
-          </div>
+            </div>
 
-          <div className="flex gap-1 border-t border-border p-1">
-            <button
-              onClick={() => {
-                onNew();
-                setOpen(false);
-              }}
-              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Plus className="h-4 w-4" />
-              <span>New</span>
-            </button>
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Upload className="h-4 w-4" />
-              <span>Import</span>
-            </button>
-            <button
-              onClick={() => {
-                onExport();
-                setOpen(false);
-              }}
-              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md p-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Download className="h-4 w-4" />
-              <span>Export</span>
-            </button>
-          </div>
-        </div>
-      )}
+            {creating && (
+              <div className="border-t border-border p-2">
+                <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1">
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="Workspace name..."
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCreate();
+                      if (e.key === "Escape") {
+                        setCreating(false);
+                        setNewName("");
+                      }
+                    }}
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                  <button
+                    onClick={handleCreate}
+                    disabled={!newName.trim()}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>,
+          document.body,
+        )}
 
       <input
         ref={fileRef}
@@ -137,11 +373,47 @@ export function WorkspaceMenu({
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) onImport(f);
+          if (f) {
+            onImport(f);
+            setOpen(false);
+          }
           e.target.value = "";
-          setOpen(false);
         }}
       />
     </div>
   );
+}
+
+/** One line of the menu: icon, label, full-width hit area. */
+function MenuRow({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+    >
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+      <span className="min-w-0 truncate">{label}</span>
+    </button>
+  );
+}
+
+/**
+ * Monogram for the workspace avatar: the first letter of each of the first two
+ * words, so "My workspace" reads as MW and a single-word name keeps one letter.
+ */
+function initials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word[0] ?? "")
+    .join("");
 }
