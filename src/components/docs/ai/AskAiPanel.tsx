@@ -48,7 +48,7 @@ interface Props {
   onCreateDoc: (name: string, content: string) => void;
 }
 
-const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
+const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|mmd|mermaid|txt)$/i, "");
 
 export function AskAiPanel({
   open,

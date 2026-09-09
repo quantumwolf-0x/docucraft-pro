@@ -35,6 +35,8 @@ import { buildMindMap } from "@/lib/mindmap";
 import { JsonTree } from "./JsonTree";
 import { ViewerHeader, type ViewerNav } from "./ViewerHeader";
 import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
+import { MermaidBlock } from "./MermaidLazy";
+import { MarkdownEditor } from "./MarkdownEditor";
 
 // Only readers who actually open a mind map pay for the layout engine and its
 // renderer, in keeping with how the spreadsheet and Word viewers load.
@@ -101,6 +103,7 @@ function DocumentViewerImpl(props: Props) {
   if (kind === "docx") return <DocxViewer {...props} />;
   if (kind === "spreadsheet" || kind === "csv") return <SpreadsheetViewer {...props} />;
   if (kind === "json") return <JsonViewer {...props} />;
+  if (kind === "mermaid") return <MermaidFileViewer {...props} />;
   if (kind === "presentation") return <PresentationViewer {...props} />;
   if (kind === "image") return <ImageViewer {...props} />;
   if (kind === "google-doc" || kind === "google-slide")
@@ -113,6 +116,82 @@ function DocumentViewerImpl(props: Props) {
  * a deck is expensive, and an app-shell re-render must not trigger it again.
  */
 export const DocumentViewer = memo(DocumentViewerImpl);
+
+/** A standalone .mmd/.mermaid document. Its source remains portable: optional
+ * `flow:` frontmatter is understood by mermaid-animator here and ignored by
+ * ordinary Mermaid renderers elsewhere. */
+function MermaidFileViewer({
+  file,
+  prevFile,
+  nextFile,
+  onNavFile,
+  onContentChange,
+  onOpenPalette,
+  startInEditFileId,
+  onStartInEditConsumed,
+}: Props) {
+  const [editing, setEditing] = useState(false);
+  const originalContentRef = useRef(file.content);
+
+  useEffect(() => {
+    originalContentRef.current = file.content;
+    setEditing(false);
+    // Content echoes from autosave must not replace the cancellation snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file.id]);
+
+  useEffect(() => {
+    if (startInEditFileId !== file.id || editing) return;
+    setEditing(true);
+    onStartInEditConsumed?.();
+  }, [editing, file.id, onStartInEditConsumed, startInEditFileId]);
+
+  useNavEscape(editing, () => setEditing(false), ESCAPE_DEPTH.mode);
+
+  return (
+    <ViewerFrame
+      file={file}
+      prevFile={prevFile}
+      nextFile={nextFile}
+      onNavFile={onNavFile}
+      onOpenPalette={onOpenPalette}
+      action={
+        !editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Edit animation
+          </button>
+        ) : undefined
+      }
+    >
+      {editing ? (
+        <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
+          <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+            Add a YAML <code>flow:</code> block before the Mermaid source to choreograph routes,
+            waits, parallel packets, and node states. Changes save automatically.
+          </div>
+          <MarkdownEditor
+            initialContent={file.content}
+            fileId={file.id}
+            onSave={(content) => onContentChange?.(file.id, content)}
+            onDone={() => setEditing(false)}
+            onCancel={() => {
+              onContentChange?.(file.id, originalContentRef.current);
+              setEditing(false);
+            }}
+          />
+        </div>
+      ) : (
+        <div className="mx-auto max-w-6xl px-4 py-4 md:px-8">
+          <MermaidBlock code={file.content} name={file.name} />
+        </div>
+      )}
+    </ViewerFrame>
+  );
+}
 
 function ViewerFrame({
   children,

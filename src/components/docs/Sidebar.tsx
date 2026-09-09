@@ -24,6 +24,7 @@ import {
   FileImage,
   FileVideo,
   FileAudio,
+  Workflow,
   Presentation,
   Globe,
   File as FileIcon,
@@ -58,6 +59,7 @@ import { useNavHistory } from "@/hooks/use-nav-history";
 // row so the list scans by shape, not just text.
 const KIND_ICON: Partial<Record<DocumentKind, LucideIcon>> = {
   markdown: FileText,
+  mermaid: Workflow,
   text: FileText,
   docx: FileType,
   pdf: FileType,
@@ -168,6 +170,8 @@ interface Props {
   folders?: SidebarFolder[];
   /** Create a blank `new.md`, optionally straight inside a folder. */
   onCreateFile?: (folderId?: string | null) => void;
+  /** Create an animated standalone Mermaid source file. */
+  onCreateMermaid?: (folderId?: string | null) => void;
   onCreateFolder?: (name: string) => void;
   onRenameFolder?: (id: string, name: string) => void;
   /** Deleting a folder keeps its documents — they return to the top level. */
@@ -234,6 +238,7 @@ function SidebarImpl({
   onToggleFileStar,
   folders = [],
   onCreateFile,
+  onCreateMermaid,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
@@ -490,7 +495,7 @@ function SidebarImpl({
     const KindIcon = kindIcon(kind);
     const mins = readingMinutes(file.content);
     const title = file.name.replace(
-      /\.(md|markdown|mdx|txt|docx|pdf|xlsx|xls|csv|json|ppt|pptx|gdoc|gslides)$/i,
+      /\.(md|markdown|mdx|mmd|mermaid|txt|docx|pdf|xlsx|xls|csv|json|ppt|pptx|gdoc|gslides)$/i,
       "",
     );
     const dragActive = reordering && !viewActive && realIndex >= 0 && !selecting;
@@ -601,7 +606,11 @@ function SidebarImpl({
               // spreadsheet has no edit mode to enter, so the item is absent
               // rather than present and inert.
               onEdit={
-                onEditFile && (kind === "markdown" || kind === "text" || kind === "json")
+                onEditFile &&
+                (kind === "markdown" ||
+                  kind === "mermaid" ||
+                  kind === "text" ||
+                  kind === "json")
                   ? () => onEditFile(file.id)
                   : undefined
               }
@@ -784,6 +793,7 @@ function SidebarImpl({
 
           <AddMenu
             onCreateFile={onCreateFile ? () => onCreateFile(null) : undefined}
+            onCreateMermaid={onCreateMermaid ? () => onCreateMermaid(null) : undefined}
             onCreateFolder={onCreateFolder ? promptNewFolder : undefined}
             onUpload={onAddFiles}
           />
@@ -901,6 +911,7 @@ function SidebarImpl({
                       </button>
                       <FolderMenu
                         onNewFile={onCreateFile ? () => onCreateFile(folder.id) : undefined}
+                        onNewMermaid={onCreateMermaid ? () => onCreateMermaid(folder.id) : undefined}
                         onNewFolder={onCreateFolder ? promptNewFolder : undefined}
                         onRename={
                           onRenameFolder
@@ -1519,6 +1530,7 @@ function MenuPanel({
  */
 export function AddMenu({
   onCreateFile,
+  onCreateMermaid,
   onCreateFolder,
   onUpload,
   align = "right",
@@ -1526,6 +1538,7 @@ export function AddMenu({
   buttonClassName,
 }: {
   onCreateFile?: () => void;
+  onCreateMermaid?: () => void;
   onCreateFolder?: () => void;
   onUpload: () => void;
   align?: "left" | "right";
@@ -1576,6 +1589,16 @@ export function AddMenu({
               }}
             />
           )}
+          {onCreateMermaid && (
+            <MenuItem
+              icon={Workflow}
+              label="New Mermaid animation"
+              onClick={() => {
+                setOpen(false);
+                onCreateMermaid();
+              }}
+            />
+          )}
           {onCreateFolder && (
             <MenuItem
               icon={FolderPlus}
@@ -1603,11 +1626,13 @@ export function AddMenu({
 /** Three-dots menu on a folder row: create inside it, rename it, delete it. */
 function FolderMenu({
   onNewFile,
+  onNewMermaid,
   onNewFolder,
   onRename,
   onDelete,
 }: {
   onNewFile?: () => void;
+  onNewMermaid?: () => void;
   onNewFolder?: () => void;
   onRename?: () => void;
   onDelete?: () => void;
@@ -1660,8 +1685,9 @@ function FolderMenu({
       {open && (
         <MenuPanel>
           {onNewFile && item("New File here", FilePlus, onNewFile)}
+          {onNewMermaid && item("New Mermaid here", Workflow, onNewMermaid)}
           {onNewFolder && item("New Folder", FolderPlus, onNewFolder)}
-          {(onNewFile || onNewFolder) && (onRename || onDelete) && (
+          {(onNewFile || onNewMermaid || onNewFolder) && (onRename || onDelete) && (
             <div className="my-1 h-px bg-border" />
           )}
           {onRename && item("Rename folder", Pencil, onRename)}
