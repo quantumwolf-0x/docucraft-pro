@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { MdFile } from "@/lib/markdown-utils";
 import { dataUrlToBlob, getDocumentKind } from "@/lib/document-utils";
 import { DocumentViewer } from "./DocumentViewer";
+import { MermaidBlock } from "./MermaidLazy";
 import {
   prepareWorkspaceEmbeds,
   resolveWorkspaceArtifact,
@@ -68,6 +69,7 @@ export function InlineArtifact({
   const { file } = artifact;
   const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
   const isPresentation = kind === "presentation";
+  const isMermaid = kind === "mermaid";
 
   // Reading-only embed: no header, footer, or controls — just the content.
   return (
@@ -76,6 +78,8 @@ export function InlineArtifact({
         className={
           isPresentation
             ? "presentation-embed-viewport overflow-hidden rounded-xl border border-border"
+            : isMermaid
+              ? "overflow-visible"
             : "artifact-viewport overflow-hidden rounded-xl border border-border"
         }
       >
@@ -101,6 +105,7 @@ function renderArtifact(file: MdFile, objectUrl: string | null, context: Omit<Pr
     return <audio src={objectUrl ?? file.data} controls className="w-full px-4 py-6" />;
   if (kind === "html")
     return <iframe title={file.name} srcDoc={file.content} sandbox="" className="artifact-html" />;
+  if (kind === "mermaid") return <MermaidBlock code={file.content} name={file.name} />;
   if (kind === "markdown" || kind === "text") {
     if ((context.depth ?? 0) >= 4 || (context.ancestors ?? []).includes(file.id))
       return (
@@ -129,6 +134,20 @@ function EmbeddedMarkdown({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          pre: (props: ComponentPropsWithoutRef<"pre">) => {
+            const codeElement = Array.isArray(props.children) ? props.children[0] : props.children;
+            if (
+              typeof codeElement === "object" &&
+              codeElement &&
+              "props" in codeElement &&
+              /language-mermaid/.test(String(codeElement.props.className ?? ""))
+            ) {
+              const value = codeElement.props.children;
+              const source = Array.isArray(value) ? value.join("") : String(value ?? "");
+              return <MermaidBlock code={source} />;
+            }
+            return <pre {...props} />;
+          },
           img: (props: ComponentPropsWithoutRef<"img">) =>
             isArtifactUrl(props.src) ? (
               <InlineArtifact

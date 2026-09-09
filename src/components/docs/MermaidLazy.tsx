@@ -23,10 +23,10 @@ function DiagramPlaceholder() {
   );
 }
 
-export function MermaidBlock({ code }: { code: string }) {
+export function MermaidBlock({ code, name }: { code: string; name?: string }) {
   return (
     <Suspense fallback={<DiagramPlaceholder />}>
-      <Mermaid code={code} />
+      <Mermaid code={code} name={name} />
     </Suspense>
   );
 }

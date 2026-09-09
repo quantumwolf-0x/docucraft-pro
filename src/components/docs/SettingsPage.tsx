@@ -669,7 +669,8 @@ function HighlightSettings({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm text-foreground">{h.text}</p>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {file?.name.replace(/\.(md|markdown|mdx|txt)$/i, "") || "Unknown file"}
+                    {file?.name.replace(/\.(md|markdown|mdx|mmd|mermaid|txt)$/i, "") ||
+                      "Unknown file"}
                     {h.label ? ` · ${h.label}` : ""}
                   </p>
                 </div>

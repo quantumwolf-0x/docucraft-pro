@@ -1043,7 +1043,11 @@ export function DocsApp() {
 
   const renameFile = useCallback(
     (id: string, newName: string) => {
-      setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName } : f)));
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === id ? { ...f, name: newName, kind: getDocumentKind(newName, f.mimeType) } : f,
+        ),
+      );
       markDirty();
     },
     [markDirty],
@@ -1055,18 +1059,33 @@ export function DocsApp() {
    * it; from there the normal autosave path takes over.
    */
   const createFile = useCallback(
-    (folderId?: string | null) => {
+    (folderId?: string | null, documentKind: "markdown" | "mermaid" = "markdown") => {
       const taken = new Set(snapshotRef.current.files.map((f) => f.name));
-      const name = uniqueFileName("new.md", taken);
+      const isMermaid = documentKind === "mermaid";
+      const name = uniqueFileName(isMermaid ? "animation.mmd" : "new.md", taken);
       const id = `${name}-${crypto.randomUUID().slice(0, 8)}`;
+      const content = isMermaid
+        ? `---
+flow:
+  speed: 260
+  loop:
+    - route: [Start, Process, Done]
+      color: blue
+    - wait: 400
+---
+flowchart LR
+  Start[Start] --> Process[Process]
+  Process --> Done[Done]
+`
+        : "";
       const doc: MdFile = {
         id,
         name,
-        content: "",
-        mimeType: "text/markdown",
-        size: 0,
+        content,
+        mimeType: isMermaid ? "text/vnd.mermaid" : "text/markdown",
+        size: content.length,
         addedAt: Date.now(),
-        kind: "markdown",
+        kind: documentKind,
         folderId: folderId ?? null,
         headings: [],
       };
@@ -1089,9 +1108,18 @@ export function DocsApp() {
       setDrawerOpen(false);
       if (location.pathname !== "/") navigate({ to: "/" });
       markDirty();
-      toast.success(`Created ${name}`, { description: "Paste your markdown, then Save." });
+      toast.success(`Created ${name}`, {
+        description: isMermaid
+          ? "Edit the flow script and Mermaid source, then preview the animation."
+          : "Paste your markdown, then Save.",
+      });
     },
     [location.pathname, navigate, markDirty],
+  );
+
+  const createMermaidFile = useCallback(
+    (folderId?: string | null) => createFile(folderId, "mermaid"),
+    [createFile],
   );
 
   const createFolder = useCallback(
@@ -2296,6 +2324,7 @@ export function DocsApp() {
                 onToggleFileStar={toggleFileStar}
                 folders={folders}
                 onCreateFile={createFile}
+                onCreateMermaid={createMermaidFile}
                 onCreateFolder={createFolder}
                 onRenameFolder={renameFolder}
                 onDeleteFolder={deleteFolder}
@@ -2367,6 +2396,7 @@ export function DocsApp() {
               <AddMenu
                 align="left"
                 onCreateFile={() => createFile(null)}
+                onCreateMermaid={() => createMermaidFile(null)}
                 onCreateFolder={promptNewFolderFromRail}
                 onUpload={() => inputRef.current?.click()}
                 buttonClassName="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -2428,6 +2458,7 @@ export function DocsApp() {
                     onToggleFileStar={toggleFileStar}
                     folders={folders}
                     onCreateFile={createFile}
+                    onCreateMermaid={createMermaidFile}
                     onCreateFolder={createFolder}
                     onRenameFolder={renameFolder}
                     onDeleteFolder={deleteFolder}

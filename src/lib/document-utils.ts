@@ -4,6 +4,8 @@ const kindByExtension: Record<string, DocumentKind> = {
   md: "markdown",
   markdown: "markdown",
   mdx: "markdown",
+  mmd: "mermaid",
+  mermaid: "mermaid",
   txt: "text",
   docx: "docx",
   pdf: "pdf",
@@ -58,7 +60,7 @@ export function getDocumentKind(name: string, mimeType = ""): DocumentKind {
 }
 
 export function isTextKind(kind: DocumentKind) {
-  return ["markdown", "text", "csv", "json", "google-doc", "google-slide", "html"].includes(kind);
+  return ["markdown", "mermaid", "text", "csv", "json", "google-doc", "google-slide", "html"].includes(kind);
 }
 
 function dataUrl(file: File): Promise<string> {
@@ -132,6 +134,7 @@ export function fileLabel(kind: DocumentKind) {
   return (
     {
       markdown: "Markdown",
+      mermaid: "Mermaid",
       text: "Text",
       docx: "Word",
       pdf: "PDF",
