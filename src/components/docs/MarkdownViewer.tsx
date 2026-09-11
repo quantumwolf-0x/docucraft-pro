@@ -43,6 +43,7 @@ import type { MdFile } from "@/lib/markdown-utils";
 import type { ReadingMode } from "@/lib/persistence";
 import { slugify } from "@/lib/markdown-utils";
 import { MermaidBlock } from "./MermaidLazy";
+import { SaveActionContext } from "./save-action";
 import { MindMapBlock } from "./MindMapBlock";
 import { ReadingProgress } from "./ReadingProgress";
 import { MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
@@ -929,6 +930,12 @@ function MarkdownViewerImpl({
           <SavableBlock
             blockType="code"
             className={isMermaid ? "docs-savable-mermaid" : "docs-savable-code"}
+            // A diagram puts the save action in its own control tray, so the
+            // star is not drawn floating beside it. Its rendered text is the
+            // stylesheet Mermaid injects rather than anything the reader sees,
+            // so the source is what identifies it.
+            renderOwnSaveAction={isMermaid}
+            identity={isMermaid ? extractText(codeEl?.props?.children).trim() : undefined}
           >
             <CodeBlock {...p} />
           </SavableBlock>
@@ -1359,12 +1366,17 @@ export const MarkdownViewer = memo(MarkdownViewerImpl);
  * Wraps a block (table, code fence, quote, image) with a hover star that saves
  * it. The block's own rendered text is the quote the saved item re-anchors by,
  * so a saved table is still findable after the document around it is edited.
+ *
+ * A block that already owns a row of overlay controls — a diagram — can render
+ * the save action itself instead, as one more segment in that row. It reads the
+ * action from {@link SaveActionContext}; see `renderOwnSaveAction`.
  */
 function SavableBlock({
   blockType,
   as: Wrapper = "div",
   className = "",
   identity,
+  renderOwnSaveAction,
   children,
 }: {
   blockType: SavedBlockType;
@@ -1372,6 +1384,11 @@ function SavableBlock({
   className?: string;
   /** Stands in for the text of blocks that have none — an image's src. */
   identity?: string;
+  /**
+   * Suppress the floating star and publish the save action on context instead,
+   * for a block that places it among its own controls.
+   */
+  renderOwnSaveAction?: boolean;
   children: React.ReactNode;
 }) {
   const ctx = useContext(SavedContext);
@@ -1391,7 +1408,12 @@ function SavableBlock({
 
   if (!ctx?.enabled) return <>{children}</>;
 
-  const probe = text || identity || "";
+  // `identity` wins over the rendered text where it is given. A block whose DOM
+  // text is not its content — a diagram, whose textContent is the stylesheet
+  // Mermaid injects, complete with a per-render generated id — would otherwise
+  // be saved under a key that changes on every render and never matches itself
+  // again, so the star could never show as saved and never toggle back off.
+  const probe = identity || text || "";
   const existing = ctx.isSaved({ kind: "block", text: probe });
 
   const toggle = (e: React.MouseEvent) => {
@@ -1404,7 +1426,7 @@ function SavableBlock({
     const container = ctx.containerRef.current;
     const el = ref.current;
     const offsets = container && el ? nodeOffsets(container, el) : null;
-    const quote = offsets?.text.trim() || probe;
+    const quote = identity || offsets?.text.trim() || probe;
     ctx.toggle({
       kind: "block",
       blockType,
@@ -1421,6 +1443,23 @@ function SavableBlock({
         : null),
     });
   };
+
+  if (renderOwnSaveAction) {
+    return (
+      <Wrapper ref={ref} className={`docs-savable ${className}`.trim()}>
+        <SaveActionContext.Provider
+          value={{
+            saved: Boolean(existing),
+            toggle,
+            label: existing ? `Remove saved ${blockType}` : `Save ${blockType}`,
+            title: existing ? "Saved — click to remove" : `Save this ${blockType}`,
+          }}
+        >
+          {children}
+        </SaveActionContext.Provider>
+      </Wrapper>
+    );
+  }
 
   return (
     <Wrapper ref={ref} className={`docs-savable ${className}`.trim()}>
